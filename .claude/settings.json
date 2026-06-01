@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install)",
+      "Bash(npm start)",
+      "Bash(node server.js)",
+      "Bash(node -c server.js)",
+      "Bash(python3 scripts/*)",
+      "Bash(mkdir -p projects/*)",
+      "Bash(curl -s http://localhost:3333/*)"
+    ]
+  }
+}

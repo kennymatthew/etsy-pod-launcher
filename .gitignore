@@ -1,0 +1,27 @@
+node_modules/
+.env
+designs/
+
+# Personal project work — each user's niche folders live here
+projects/*/
+
+# Claude Code session files (personal)
+.claude/settings.local.json
+.claude/memory/
+
+# Playwright MCP session logs
+.playwright-mcp/
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Personal task list — each user has their own
+TODO.md
+
+# Course transcripts — copyrighted content, not redistributable
+shared/knowledge/transcripts/
