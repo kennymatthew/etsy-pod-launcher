@@ -195,16 +195,4 @@ Your niche folders live in [projects/](projects/). Each folder follows the same 
 To start your first project, open this folder in Claude Code and say:
 > "I want to launch a [product type] on Etsy. Help me research the top 5 competitors."
 
----
-
-## Changelog
-
-### 2026-06-03
-- **`research-competitors.py`** — upgraded to scrape a full Etsy best-seller results page (~30-48 listings) using the correct US best-seller URL format; previously only scraped top 5
-- **`extract-competitors-prompt.md`** *(new)* — schema + field-by-field rules for building competitors.json; covers demand signals, image URLs, rating gotcha (star widget vs numeric average), color completeness, print method inference
-- **`generate-competitor-report.py`** *(new)* — generates a self-contained HTML competitor report from any niche's competitors.json; includes category filters, demand badges, product images, sort, and coral theme; run once after building competitors.json
-- **`competitors.json` schema** — added `demand_signals` (e.g. "In 20+ carts") and `image_url` fields to all entries
-- **Docs** — README phase count corrected (7→9), pricing formula corrected, WORKFLOW.md Phase 1.2 updated to reflect full scrape→extract→report flow
-
-### 2026-05-31
-- Initial release — 9-phase POD workflow with Firecrawl scraping, Playwright eRank extraction, Printify API automation, and AI-assisted listing copy
+See [CHANGELOG.md](CHANGELOG.md) for version history.
