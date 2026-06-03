@@ -128,7 +128,7 @@ flowchart TD
 /projects/<niche-name>/
   01-research/
     competitors.json      ← scraped competitor data (source of truth — includes demand signals, image URLs)
-    competitor-report.html ← visual HTML report (regenerate via scripts/generate-competitor-report.py)
+    competitor-report.html ← two-tab HTML report: Tab 1 = Market Insights (from market-insights.md), Tab 2 = Competitor card grid; regenerate via scripts/generate-competitor-report.py
     keywords.md           ← keyword volumes from eRank
     market-insights.md    ← patterns, gaps, what to copy/avoid
     scrapes/              ← raw firecrawl output (auto-written by research script)
@@ -158,7 +158,7 @@ flowchart TD
 
 /scripts/
   research-competitors.py      ← shared tool: scrapes Etsy competitors via Firecrawl
-  generate-competitor-report.py ← generates competitor-report.html from competitors.json (any niche)
+  generate-competitor-report.py ← generates two-tab competitor-report.html from competitors.json + market-insights.md (any niche)
   extract-competitors-prompt.md ← paste to Claude when building competitors.json from scrapes
 ```
 

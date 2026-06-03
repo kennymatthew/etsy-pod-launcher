@@ -65,9 +65,11 @@ After competitors.json is built, generate the visual HTML report:
 python3 scripts/generate-competitor-report.py --niche your-niche-name
 ```
 
-This creates `projects/[niche]/01-research/competitor-report.html` — a self-contained visual report with category filters, demand badges, images, and sort options. Open it directly in a browser.
+This creates `projects/[niche]/01-research/competitor-report.html` — a self-contained two-tab HTML report. After this step, **Tab 2 (Competitor Report)** is live: card grid with 8 category filters, demand badges (🔥 In 20+ carts), product images, and sort by price/reviews/rating.
 
-**Output:** `01-research/scrapes/etsy-listing-*.md` (raw) + `01-research/competitors.json` (structured) + `01-research/competitor-report.html` (visual)
+**Tab 1 (Market Insights)** shows a placeholder until market-insights.md is written in Phase 1.3, then regenerate to populate it.
+
+**Output:** `01-research/scrapes/etsy-listing-*.md` (raw) + `01-research/competitors.json` (structured) + `01-research/competitor-report.html` (visual, Tab 2 only at this stage)
 
 **Note:** Always regenerate the HTML report after updating competitors.json — the HTML inlines the JSON data and goes stale if edited separately.
 
@@ -76,6 +78,35 @@ Tell the AI:
 > "Analyse competitors.json and write market-insights.md — what colors, sizes, and prices are most common? What gaps exist?"
 
 **Output:** `01-research/market-insights.md`
+
+After market-insights.md is written, regenerate the HTML report:
+```bash
+python3 scripts/generate-competitor-report.py --niche your-niche-name
+```
+
+This populates **Tab 1 (Market Insights)** with:
+- A top-performing listings strip (top 8 by reviews, all product types, scrollable with images)
+- The full market-insights.md rendered as styled HTML
+- Every listing ID in the text auto-linked to a small image chip (hover = title + price, click = Etsy listing)
+- Source label dots inline (`●` green = our data, `●` blue = inferred, `●` gray = market knowledge) — click "Show labels" in the legend to expand to full pills
+
+**Output:** `01-research/competitor-report.html` (both tabs now fully populated)
+
+**Source labeling rule (applies to every market-insights.md):**
+Every claim must be tagged with its source. Use these inline tags:
+
+| Tag | Meaning |
+|---|---|
+| `[our data]` | Directly observed in competitors.json, keywords.md, or other scraped files |
+| `[inferred]` | Logical conclusion drawn from our data — not directly observed |
+| `[market knowledge]` | General POD/Etsy knowledge from AI training data — not verified for this niche |
+
+Gap/opportunity sections must include a confidence column in any summary table:
+- ✅ High — backed by `[our data]`
+- ⚠️ Medium — `[inferred]` or partially backed
+- ❌ Low — primarily `[market knowledge]`, demand unverified
+
+Never mix data and inference without flagging which is which.
 
 ### 1.5 Validate your slogan/phrase (sub-niche check)
 Before designing anything, search the **exact phrase** your design will use on Etsy.
@@ -444,5 +475,5 @@ For a new niche, just:
 | Printify API | Reading/updating products, placement, variants | AI calls it automatically |
 | eRank | Real Etsy search volume data | You log in; AI extracts data |
 | `research-competitors.py` | Scrape best-seller Etsy listings into scrapes/ | `python3 scripts/research-competitors.py --niche X --query "Y"` |
-| `generate-competitor-report.py` | Build HTML report from competitors.json | `python3 scripts/generate-competitor-report.py --niche X` |
+| `generate-competitor-report.py` | Build two-tab HTML report from competitors.json + market-insights.md | `python3 scripts/generate-competitor-report.py --niche X` |
 | `extract-competitors-prompt.md` | Schema + rules for building competitors.json | Paste to Claude alongside the scrape manifest |

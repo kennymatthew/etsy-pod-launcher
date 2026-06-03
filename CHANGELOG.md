@@ -9,6 +9,23 @@ Version numbering:
 
 ---
 
+## [v1.2.0] — 2026-06-03
+
+### Added
+- `generate-competitor-report.py` now produces a **two-tab HTML report**: Tab 1 = Market Insights (rendered from market-insights.md), Tab 2 = Competitor Report (existing card grid)
+- **Top performers strip** at the top of Tab 1 — top 8 listings by reviews across all product types, horizontally scrollable with real product images, titles, review counts, and prices; each card links to Etsy
+- **Inline listing ID chips** — every 10-13 digit listing ID in market-insights.md auto-renders as a small image chip (product thumbnail + review count); hover shows title + price; click opens Etsy listing; works in paragraphs, bullet lists, and tables
+- **Source label dot mode** — `[our data]` / `[inferred]` / `[market knowledge]` tags default to compact colored dots (● green / ● blue / ● gray) with hover tooltips; "Show labels" toggle in the legend expands all dots to full pill form throughout the document
+- **Source label legend** — compact one-liner below the page title explaining the three dot/pill types with a toggle button (Show labels / Hide labels)
+- **Source labeling convention** — every claim in market-insights.md must be tagged `[our data]`, `[inferred]`, or `[market knowledge]`; gap/opportunity tables must include a Confidence column
+
+### Changed
+- `generate-competitor-report.py` — backward compatible: if market-insights.md is absent, Tab 1 shows a placeholder; Tab 2 (Competitor Report) is unaffected
+- `WORKFLOW.md` Phase 1.2 — updated to describe the two-tab report and clarify that Tab 1 is a placeholder until Phase 1.3
+- `WORKFLOW.md` Phase 1.3 — added instruction to regenerate the HTML after writing market-insights.md, with full description of Tab 1 features
+
+---
+
 ## [v1.1.0] — 2026-06-03
 
 ### Added
