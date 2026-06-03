@@ -10,9 +10,9 @@ Sub-agents run as separate processes with their own context window. Use them whe
 
 | Task | How to run | Signal |
 |---|---|---|
-| Scrape competitors + build competitors.json | **Sub-agent** | Reads 5 large markdown files |
+| Scrape competitors + build competitors.json | **Sub-agent** | Reads 50+ large markdown files |
 | eRank keyword extraction via Playwright | **Sub-agent** | Large DOM snapshots |
-| Analysing all listing files before recommending | **Sub-agent** | Reading 5+ files at once |
+| Analysing all listing files before recommending | **Sub-agent** | Reading many files at once |
 | Single Printify API GET or PUT | Inline | Small payload, fast |
 | Updating one markdown file | Inline | Data already in context |
 | Variant filtering + API updates | Inline | Single script, small result |
@@ -33,7 +33,7 @@ Tell the AI:
 
 It will create `/projects/[niche-name]/01-research/` through `06-performance/`.
 
-### 1.2 Scrape top 5 competitor listings
+### 1.2 Scrape competitor listings
 
 Run the research script:
 ```bash
@@ -41,25 +41,35 @@ python3 scripts/research-competitors.py --niche your-niche-name --query "your et
 ```
 
 This uses Firecrawl to:
-1. Search Google for the top Etsy listings matching your query
+1. Search Etsy for best-seller listings matching your query
 2. Scrape each listing page in parallel (3 at a time)
 3. Save clean markdown files to `projects/[niche]/01-research/scrapes/`
 4. Write a manifest file at `projects/[niche]/01-research/scrapes/manifest.json`
 
-Then tell Claude:
-> "Read projects/[niche]/01-research/scrapes/manifest.json and create competitors.json"
+Then use `scripts/extract-competitors-prompt.md` — paste it to Claude with the instruction:
+> "Read all etsy-listing-*.md files in scrapes/ and build competitors.json using the schema in this prompt"
 
-Claude reads the scraped pages and extracts:
-- Price range
+Claude (ideally via sub-agent) reads every scraped page and extracts:
+- Price range, rating, review count, sales count
 - Title keywords
-- Colors mentioned in descriptions
-- Rating and Star Seller status
-- Description structure and hooks
-- Ships from location
+- All colors listed in the dropdown
+- Print method (confirmed vs inferred)
+- Personalization type
+- Design style and key phrases
+- Demand signals (e.g. "In 20+ carts", "In high demand")
+- First product image URL
+- Shop name, Star Seller status, ships from
 
-**Output:** `.firecrawl/etsy-listing-*.md` (raw) + `01-research/competitors.json` (structured)
+After competitors.json is built, generate the visual HTML report:
+```bash
+python3 scripts/generate-competitor-report.py --niche your-niche-name
+```
 
-**Note:** Color and size *dropdown* values aren't scraped (Etsy loads those via JS). Colors are extracted from the description text instead — usually just as accurate.
+This creates `projects/[niche]/01-research/competitor-report.html` — a self-contained visual report with category filters, demand badges, images, and sort options. Open it directly in a browser.
+
+**Output:** `01-research/scrapes/etsy-listing-*.md` (raw) + `01-research/competitors.json` (structured) + `01-research/competitor-report.html` (visual)
+
+**Note:** Always regenerate the HTML report after updating competitors.json — the HTML inlines the JSON data and goes stale if edited separately.
 
 ### 1.3 Extract market insights
 Tell the AI:
@@ -433,3 +443,6 @@ For a new niche, just:
 | Firecrawl | Faster bulk scraping of competitor pages | AI uses it automatically |
 | Printify API | Reading/updating products, placement, variants | AI calls it automatically |
 | eRank | Real Etsy search volume data | You log in; AI extracts data |
+| `research-competitors.py` | Scrape best-seller Etsy listings into scrapes/ | `python3 scripts/research-competitors.py --niche X --query "Y"` |
+| `generate-competitor-report.py` | Build HTML report from competitors.json | `python3 scripts/generate-competitor-report.py --niche X` |
+| `extract-competitors-prompt.md` | Schema + rules for building competitors.json | Paste to Claude alongside the scrape manifest |

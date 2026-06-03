@@ -2,16 +2,18 @@
 """
 research-competitors.py
 
-Scrapes top Etsy competitor listings for a niche using Firecrawl.
-Saves clean markdown files to .firecrawl/ cache, then outputs a manifest
-so Claude can read the files and produce competitors.json.
+Flow:
+  1. Scrape 1 page of Etsy best-seller search results for the query (US, physical items only)
+  2. Extract all listing IDs from that page (~30-48 listings)
+  3. Scrape each listing individually with --only-main-content for full details
+  4. Save manifest so Claude can build competitors.json
 
 Usage:
-  python3 scripts/research-competitors.py --niche save-the-date-tshirts --query "save the date t shirts"
-  python3 scripts/research-competitors.py --niche funny-cat-shirts --query "funny cat shirt" --count 5
+  python3 scripts/research-competitors.py --niche personalized-gift-for-dad --query "personalized gift for dad"
+  python3 scripts/research-competitors.py --niche dad-shirt --query "custom dad shirt" --count 10
 """
 
-import subprocess, json, re, argparse, datetime, os, shutil, sys
+import subprocess, json, re, argparse, datetime, os, shutil, sys, urllib.parse
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -21,15 +23,12 @@ def _find_firecrawl():
     found = shutil.which('firecrawl')
     if found:
         return Path(found)
-    # fallback: common npm global locations
     for p in [Path.home() / '.npm-global/bin/firecrawl',
               Path('/usr/local/bin/firecrawl'),
               Path('/opt/homebrew/bin/firecrawl')]:
         if p.exists():
             return p
-    print("✗ firecrawl CLI not found. Install it with: npm install -g firecrawl")
-    print("  Then get a free API key at https://www.firecrawl.dev/app/api-keys")
-    print("  and set FIRECRAWL_API_KEY in your .env file.")
+    print("✗ firecrawl CLI not found. Install: npm install -g firecrawl")
     sys.exit(1)
 
 FIRECRAWL_BIN = _find_firecrawl()
@@ -47,55 +46,82 @@ def load_env():
 
 ENV = load_env()
 
-def firecrawl_scrape(url, output_path, wait_ms=3000):
+def build_etsy_search_url(query):
+    """Build Etsy best-seller search URL: US sellers, physical items, best sellers only."""
+    encoded = urllib.parse.quote(query)
+    return (
+        f"https://www.etsy.com/search?q={encoded}"
+        f"&instant_download=false&explicit=1&is_best_seller=true&locationQuery=6252001"
+    )
+
+def scrape_search_page(query, scrapes_dir):
+    """
+    Scrape 1 page of Etsy best-seller results.
+    Returns list of listing URLs extracted from the page.
+    """
+    url = build_etsy_search_url(query)
+    slug = re.sub(r'[^a-z0-9]+', '-', query.lower()).strip('-')
+    output_path = scrapes_dir / f"search-{slug}-p1.md"
+
+    print(f"  URL: {url}")
+
     result = subprocess.run(
-        [str(FIRECRAWL_BIN), 'scrape', url, '--only-main-content',
-         '--wait-for', str(wait_ms), '-o', str(output_path)],
+        [str(FIRECRAWL_BIN), 'scrape', url, '-o', str(output_path)],
         capture_output=True, text=True, timeout=90, env=ENV
     )
-    if not output_path.exists() or output_path.stat().st_size < 200:
-        return False
-    # reject Etsy "item unavailable" pages — file exists but listing is dead
-    content_start = output_path.read_text()[:500].lower()
-    if 'this item is unavailable' in content_start:
-        output_path.unlink()
-        return False
-    return True
 
-def firecrawl_search(query, limit=5):
-    """Use firecrawl search (backed by Google) to find Etsy listing URLs."""
-    result = subprocess.run(
-        [str(FIRECRAWL_BIN), 'search',
-         f'{query} site:etsy.com/listing',
-         '--limit', str(limit)],
-        capture_output=True, text=True, timeout=30, env=ENV
-    )
-    pattern = r'https://www\.etsy\.com/listing/(\d+)/[^\s\)\"]*'
-    seen, urls = set(), []
-    for listing_id in re.findall(pattern, result.stdout):
-        if listing_id not in seen:
-            seen.add(listing_id)
-            urls.append(f"https://www.etsy.com/listing/{listing_id}/")
-    return urls[:limit]
+    if not output_path.exists() or output_path.stat().st_size < 200:
+        print("  ✗ Search page scrape failed or returned empty content")
+        return url, []
+
+    content = output_path.read_text()
+
+    # Extract listing IDs in order, deduplicated
+    seen, ids = set(), []
+    for match in re.finditer(r'etsy\.com/listing/(\d+)/', content):
+        lid = match.group(1)
+        if lid not in seen:
+            seen.add(lid)
+            ids.append(lid)
+
+    listing_urls = [f"https://www.etsy.com/listing/{lid}/" for lid in ids]
+    print(f"  Found {len(listing_urls)} listings")
+    return url, listing_urls
 
 def scrape_one_listing(args):
     url, idx, scrapes_dir = args
     listing_id = re.search(r'/listing/(\d+)/', url).group(1)
     output = scrapes_dir / f'etsy-listing-{listing_id}.md'
+
     if output.exists() and output.stat().st_size > 500:
-        print(f"  [{idx+1}] cached  — {listing_id}")
+        print(f"  [{idx+1}] cached   — {listing_id}")
         return url, str(output), True
+
     print(f"  [{idx+1}] scraping — {listing_id} ...")
-    ok = firecrawl_scrape(url, output, wait_ms=2500)
-    status = "✓" if ok else "✗"
-    print(f"  [{idx+1}] {status}       — {listing_id}")
-    return url, str(output) if ok else None, ok
+    result = subprocess.run(
+        [str(FIRECRAWL_BIN), 'scrape', url, '--only-main-content',
+         '--wait-for', '2500', '-o', str(output)],
+        capture_output=True, text=True, timeout=90, env=ENV
+    )
+
+    if not output.exists() or output.stat().st_size < 200:
+        print(f"  [{idx+1}] ✗         — {listing_id} (empty)")
+        return url, None, False
+
+    content_start = output.read_text()[:500].lower()
+    if 'this item is unavailable' in content_start:
+        output.unlink()
+        print(f"  [{idx+1}] ✗         — {listing_id} (unavailable)")
+        return url, None, False
+
+    print(f"  [{idx+1}] ✓         — {listing_id}")
+    return url, str(output), True
 
 def main():
-    parser = argparse.ArgumentParser(description='Scrape Etsy competitors with Firecrawl')
-    parser.add_argument('--niche', required=True, help='Project slug, e.g. save-the-date-tshirts')
-    parser.add_argument('--query', required=True, help='Etsy search query, e.g. "save the date t shirts"')
-    parser.add_argument('--count', type=int, default=5, help='Number of listings to scrape (default 5)')
+    parser = argparse.ArgumentParser(description='Scrape Etsy best-seller competitors')
+    parser.add_argument('--niche', required=True, help='Project slug, e.g. personalized-gift-for-dad')
+    parser.add_argument('--query', required=True, help='Search term, e.g. "custom dad shirt"')
+    parser.add_argument('--count', type=int, default=None, help='Max listings to scrape (default: all found on page)')
     args = parser.parse_args()
 
     project_dir = BASE_DIR / 'projects' / args.niche / '01-research'
@@ -103,47 +129,51 @@ def main():
     scrapes_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"\n── Competitor Research: {args.niche} ──")
-    print(f"Query : {args.query}")
-    print(f"Scrapes: projects/{args.niche}/01-research/scrapes/")
-    print(f"Output : {project_dir / 'competitors.json'}\n")
+    print(f"Query  : {args.query}")
+    print(f"Scrapes: projects/{args.niche}/01-research/scrapes/\n")
 
-    # Step 1: use firecrawl search to find listing URLs (avoids Etsy bot detection)
-    print("Step 1/3  Finding top Etsy listings via Firecrawl search...")
-    urls = firecrawl_search(args.query, limit=args.count)
-    if not urls:
-        print("  ✗ No listing URLs found. Check your Firecrawl API key or try a different query.")
+    # Step 1: scrape the Etsy best-seller search page
+    print("Step 1/2  Scraping Etsy best-seller search page...")
+    search_url, listing_urls = scrape_search_page(args.query, scrapes_dir)
+
+    if not listing_urls:
+        print("  ✗ No listing URLs found. Check your API key or try a different query.")
         return 1
-    print(f"  Found {len(urls)} listings:")
-    for i, u in enumerate(urls, 1):
-        print(f"    {i}. {u}")
 
-    # Step 3: scrape listings in parallel (max 3 concurrent)
-    print(f"\nStep 3/3  Scraping {len(urls)} listings in parallel...")
-    results = []
+    if args.count:
+        listing_urls = listing_urls[:args.count]
+        print(f"  Limiting to {args.count} listings (--count flag)")
+
+    # Step 2: scrape each listing individually
+    print(f"\nStep 2/2  Scraping {len(listing_urls)} listings in parallel (max 3 concurrent)...")
+    raw_results = []
     with ThreadPoolExecutor(max_workers=3) as ex:
-        futures = {ex.submit(scrape_one_listing, (url, i, scrapes_dir)): i for i, url in enumerate(urls)}
+        futures = {
+            ex.submit(scrape_one_listing, (url, i, scrapes_dir)): i
+            for i, url in enumerate(listing_urls)
+        }
         for future in as_completed(futures):
-            results.append(future.result())
+            raw_results.append(future.result())
 
-    results.sort(key=lambda r: urls.index(r[0]) if r[0] in urls else 99)
-    scraped = [(url, path) for url, path, ok in results if ok and path]
+    raw_results.sort(key=lambda r: listing_urls.index(r[0]) if r[0] in listing_urls else 99)
+    scraped = [(url, path) for url, path, ok in raw_results if ok and path]
 
     # Save manifest
     manifest = {
         "niche": args.niche,
         "query": args.query,
+        "etsy_search_url": search_url,
         "scraped_date": datetime.date.today().isoformat(),
-        "listing_urls": urls,
+        "listing_urls": listing_urls,
         "scraped_files": [{"url": u, "file": p} for u, p in scraped],
         "output_target": str(project_dir / 'competitors.json'),
         "next_step": f"Ask Claude: 'Read projects/{args.niche}/01-research/scrapes/manifest.json and create competitors.json'"
     }
-    manifest_path = scrapes_dir / 'manifest.json'
-    manifest_path.write_text(json.dumps(manifest, indent=2))
+    (scrapes_dir / 'manifest.json').write_text(json.dumps(manifest, indent=2))
 
     print(f"\n── Done ──")
-    print(f"Scraped : {len(scraped)}/{len(urls)} listings")
-    print(f"Manifest: {manifest_path}")
+    print(f"Scraped : {len(scraped)}/{len(listing_urls)} listings")
+    print(f"Saved   : projects/{args.niche}/01-research/scrapes/")
     print(f"\nNext step — tell Claude:")
     print(f'  "Read projects/{args.niche}/01-research/scrapes/manifest.json and create competitors.json"')
     return 0

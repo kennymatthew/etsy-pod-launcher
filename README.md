@@ -20,16 +20,18 @@ Launch a print-on-demand product on Etsy using AI to handle research, listing co
 
 ---
 
-## The 7 Phases
+## The 9 Phases
 
 ```
 Phase 1 → Research      Find out what's selling and what keywords buyers use
 Phase 2 → Design        Create the print file based on research
 Phase 3 → Mockups       Research + build proven Etsy listing photos
-Phase 4 → Listing       Write title, tags, description, and price
-Phase 5 → Sample        Order one shirt to check quality before going live
-Phase 6 → Go Live       Publish to Etsy and track performance
-Phase 7 → Diagnostics   Fix the right thing based on which metric is broken
+Phase 4 → Printify      Create products, set placement, reduce variants
+Phase 5 → Listing       Write title, tags, description, and price
+Phase 6 → Sample        Order one shirt to check quality before going live
+Phase 7 → Go Live       Publish to Etsy, set sale, configure automations
+Phase 8 → Diagnostics   Fix the right thing based on which metric is broken
+Phase 9 → Scale         Multiply winners across mockup styles and niches
 ```
 
 ---
@@ -75,7 +77,7 @@ flowchart TD
         L1[Write title\nfront-load top keyword] --> L2
         L2[Set 13 Etsy tags\nhighest search vol first] --> L3
         L3[Write description\nkeyword-rich template] --> L4
-        L4[Set pricing\nPrintify cost × 2.5 = 60% margin]
+        L4[Set pricing\nlist = cost × 5, permanent 50% off sale]
     end
 
     subgraph P5 [Phase 5 · Sample]
@@ -125,13 +127,14 @@ flowchart TD
 ```
 /projects/<niche-name>/
   01-research/
-    competitors.json      ← scraped competitor data (source of truth)
+    competitors.json      ← scraped competitor data (source of truth — includes demand signals, image URLs)
+    competitor-report.html ← visual HTML report (regenerate via scripts/generate-competitor-report.py)
     keywords.md           ← keyword volumes from eRank
     market-insights.md    ← patterns, gaps, what to copy/avoid
     scrapes/              ← raw firecrawl output (auto-written by research script)
   02-design/
     brief.md              ← design spec
-    print-files/          ← DTG print PNGs uploaded to Printify (black + off-white versions)
+    print-files/          ← DTG print PNGs for Printify (black + off-white versions, transparent bg)
   03-mockups/             ← Etsy listing photos (mockup packs + composited images)
   04-listing/
     titles.md             ← title options
@@ -154,7 +157,9 @@ flowchart TD
     transcripts/
 
 /scripts/
-  research-competitors.py ← shared tool: scrapes Etsy competitors via Firecrawl
+  research-competitors.py      ← shared tool: scrapes Etsy competitors via Firecrawl
+  generate-competitor-report.py ← generates competitor-report.html from competitors.json (any niche)
+  extract-competitors-prompt.md ← paste to Claude when building competitors.json from scrapes
 ```
 
 ---
@@ -164,7 +169,7 @@ flowchart TD
 1. **Never guess competitor data** — always scrape it first and read competitors.json
 2. **Always verify print placement visually** before copying to other products
 3. **≤100 variants** on Etsy — Gildan 5000 has 255 by default, cut it down
-4. **60% margin minimum** — cost × 2.5 = sell price
+4. **60% margin minimum** — list = cost × 5, permanent 50% off sale = effective sell price at cost × 2.5
 5. **Order a sample** before going live — what looks good in mockup may differ in print
 6. **Tag 1 = highest search volume keyword** — eRank tells you which one that is
 
@@ -175,7 +180,7 @@ flowchart TD
 1. Create the folder: `projects/your-niche-name/01-research/` through `05-performance/`
 2. Tell the AI: *"I want to launch a [product type] on Etsy. Research the top 5 competitors."*
 3. Log into eRank, tell the AI to extract keyword data
-4. Create your design, save to `/02-design/assets/`
+4. Create your design, save to `/02-design/print-files/`
 5. Tell the AI: *"Create a Printify product with this design"*
 6. Follow through Phases 3–6
 
