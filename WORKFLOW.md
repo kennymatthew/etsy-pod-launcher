@@ -163,10 +163,12 @@ Create your design file (PNG recommended, transparent background).
 
 ### 2.3 Export two design versions
 Every design needs **two PNG exports** before uploading to Printify:
-1. **Black design** (`design-name-black.png`) → for white and ivory shirts only
-2. **Off-white design** (`design-name-offwhite.png`) → for all other colorways (including dark shirts)
+1. **Black-ink design** (`design1-black.png`) → for light shirts (white, ivory, natural, sand, sport grey, light blue, etc.)
+2. **White-ink design** (`design1-white.png`) → for dark shirts (black, navy, dark heather, forest green, maroon, etc.)
 
-Using pure white ink on dark shirts produces muddy or invisible prints. The off-white version triggers a double ink layer on DTG printers. Assign the correct version to each color group in Printify's canvas editor.
+Name files sequentially per design concept: `design1-black.png` + `design1-white.png`, `design2-black.png` + `design2-white.png`, etc.
+
+For dark shirts, the DTG printer lays a white under-base before printing — this is why white-ink designs need a fully transparent background (no white fill on the PNG). The creation script assigns the correct file to each color group automatically.
 
 Save both files to `02-design/print-files/`.
 
@@ -222,77 +224,13 @@ Save finished listing photos to `03-mockups/`.
 
 ---
 
-## Phase 4 · Printify Setup
+## Phase 4 · Listing
 
-**Goal:** Products on Printify with correct placement and the right variant set.
+**Goal:** Finalize all listing copy — title, tags, description, price, and color decisions — before running the creation script.
 
-### 4.1 Create one product manually in Printify
-1. Log into Printify → Create product
-2. Select your blank (e.g., Gildan 5000)
-3. Upload your design PNG
-4. Set placement in the visual editor until the preview looks correct
-5. Save the product
+> **Do Phase 4 before Phase 5.** The Printify creation script bakes in your finalized title and description. Complete listing copy here first, then create the products in Phase 5.
 
-**Do NOT create all your products yet — just one first.**
-
-### 4.2 Read and save placement values
-Tell the AI:
-> "Read the placement for product [name] via the Printify API and save the x/y/scale values"
-
-The AI calls:
-```
-GET /v1/shops/{shop_id}/products/{id}.json
-```
-And extracts `print_areas[].placeholders[].images[]` → x, y, scale.
-
-Values get saved to `shared/supplier-notes.md` for reuse.
-
-**Why this matters:** Printify's default `scale=1.0` fills the full print template including edge bleed — designs get clipped. The safe scale for Gildan 5000 is ~0.878.
-
-### 4.3 Create remaining products
-Tell the AI:
-> "Create products for [design 2], [design 3] using the same blank"
-
-The AI creates them via the Printify API using your design files.
-
-### 4.4 Copy verified placement to all products
-Tell the AI:
-> "Copy the placement from [product 1] to all other products"
-
-The AI calls `PUT /v1/shops/{shop_id}/products/{id}.json` for each product with the verified x/y/scale values.
-
-### 4.5 Reduce variants to ≤100 for Etsy
-Etsy's limit is 100 variants per listing. Gildan 5000 has 32 colors × 8 sizes = 255 by default.
-
-Tell the AI:
-> "Based on the competitor research, which colors should we keep? Update all products to only enable those variants."
-
-The AI:
-1. Checks market-insights.md for which colors competitors actually offer
-2. Selects the top 12 colors × 8 sizes = 96 variants (under the 100 cap)
-3. Disables the rest via the Printify API
-
-**Output:** All products updated to 96 variants.
-
-### Known-good placement values
-
-| Blank | x | y | scale | Verified |
-|---|---|---|---|---|
-| Gildan 5000 | 0.5 | 0.547735567085003 | 0.8777092933600811 | 2026-05-31 |
-
-Add new blanks here as you verify them.
-
-### Gotchas
-- The Printify PUT API requires `variant_ids` array in `print_areas` — if you get error code 8150, that's why
-- Always verify placement on the FIRST product visually before bulk-copying to the rest
-
----
-
-## Phase 5 · Listing
-
-**Goal:** A complete, keyword-optimised Etsy listing ready to publish.
-
-### 5.1 Title
+### 4.1 Title
 Tell the AI:
 > "Write title options for this listing based on the eRank keyword data"
 
@@ -305,7 +243,7 @@ Rules:
 
 **Output:** `04-listing/titles.md`
 
-### 5.2 Tags (13 max, 20 characters each)
+### 4.2 Tags (13 max, 20 characters each)
 Tell the AI:
 > "Write the 13 Etsy tags based on the keyword research, ordered by search volume"
 
@@ -316,7 +254,7 @@ Rules:
 
 **Output:** `04-listing/tags.md`
 
-### 5.3 Description
+### 4.3 Description
 Tell the AI:
 > "Write a full Etsy description using the keyword-anchored template"
 
@@ -332,7 +270,7 @@ Structure used by all top sellers:
 
 **Output:** `04-listing/descriptions.md`
 
-### 5.4 Pricing
+### 4.4 Pricing
 Tell the AI:
 > "Pull the Printify base costs from the API and calculate prices at 60% margin"
 
@@ -342,12 +280,116 @@ This gives the same 51% net margin as cost×2.5, but the sale badge never disapp
 
 **Output:** `04-listing/pricing.md`
 
+### 4.5 Generate listing-strategy.html
+Tell the AI:
+> "Generate listing-strategy.html consolidating the finalized title, tags, description, pricing, and color decisions"
+
+The AI generates a self-contained 6-tab HTML document saved to `04-listing/listing-strategy.html`:
+
+| Tab | Content |
+|---|---|
+| Strategy | Approach recommendation, key decisions, rationale |
+| Titles | All title options with character counts; final pick highlighted |
+| Tags | All 13 tags ordered by search volume |
+| Price | Cost / list / sale per size tier; margin % per variant |
+| Colors | Color list with ink-group assignments (white-ink for dark shirts vs black-ink for light shirts) |
+| Personalization | Personalization field instructions (if applicable) |
+
+Review all 6 tabs. When everything looks right, proceed to 4.6.
+
+**Output:** `04-listing/listing-strategy.html`
+
+### 4.6 Review listing-preview.html and approve
+Tell the AI:
+> "Generate listing-preview.html with the final Etsy listing preview and Printify setup details"
+
+The AI generates a 3-tab HTML document saved to `04-listing/listing-preview.html`:
+- **Tab 1 / Tab 2 (one per design):** Etsy listing view — title, description, tags, price, color list, personalization instructions exactly as they'll appear on Etsy
+- **Tab 3 (Printify Setup):** API payload summary — design files, placement values, color groups, variant count per group
+
+Review this document carefully. Confirm every field is correct. **This is the last checkpoint before any API calls are made.** Once approved, run the creation script in Phase 5.
+
+**Output:** `04-listing/listing-preview.html`
+
 ### Gotchas
 - Etsy uses title AND tags together for indexing — repeat your top keywords in both
 - First 3 tags carry the most weight — never waste them on low-volume phrases
 - **Shipping decision:** Two valid approaches — pick one before publishing:
   - *Built-in free shipping* — include shipping cost in item price, offer free shipping on all orders
   - *Separate shipping + $35 threshold* — charge $5.99 first item / $1.99 additional, enable Etsy's Free Shipping Guarantee at $35+ to get the free shipping badge in search and incentivise multi-item orders
+
+---
+
+## Phase 5 · Printify Setup
+
+**Goal:** Products on Printify as drafts — created by script with the correct variant structure, placement, and pricing.
+
+### 5.1 Create a niche script
+
+Each niche gets its own creation script at `projects/[niche]/scripts/create-[niche]-listings.py`. The script:
+- Imports `printify_core` from `shared/` (the shared Printify API library)
+- Defines a `LISTINGS` array with one entry per design: title, description, dark_file, light_file, placement
+- Handles `--listing N` (create one design at a time) and `--finalize <product_id>` (sync placement)
+
+Tell the AI:
+> "Create the Printify creation script for [niche], using the finalized listing copy from Phase 4"
+
+The AI generates the script with the title and description from listing-preview.html baked in.
+
+### 5.2 Create Design 1
+
+```bash
+python projects/[niche]/scripts/create-[niche]-listings.py --listing 1
+```
+
+This script:
+1. Fetches variant groups from the Printify catalog
+2. Uploads `design1-white.png` (white ink → dark shirts) and `design1-black.png` (black ink → light shirts)
+3. Creates the product draft with an initial 2-group print_areas structure
+4. Immediately rebuilds print_areas with the correct per-color structure: 1 default (all non-light colors) + 1 per light color (8 size variants each)
+5. Sets pricing at cost × 5
+
+**Output:** Product created as DRAFT in Printify. Terminal prints the product ID and exact next-step commands.
+
+### 5.3 Verify placement in Printify editor
+
+1. Open Printify → find the newly created draft
+2. Click into the editor for a dark shirt variant — confirm the design is centred and not clipped
+3. Click into a light shirt variant (e.g. White) — confirm it shows the black-ink design, not invisible white-on-white
+4. If placement needs adjustment: drag in the visual editor, then **Save**
+
+### 5.4 Sync placement to all print_areas
+
+```bash
+python projects/[niche]/scripts/create-[niche]-listings.py --finalize <product_id>
+```
+
+The script fetches the product, detects which print_area the user changed in the visual editor (the outlier — least common placement across all print_areas via `collections.Counter`), and pushes that placement to all print_areas. Every color variant now uses the verified placement.
+
+### 5.5 Repeat for each remaining design
+
+```bash
+python projects/[niche]/scripts/create-[niche]-listings.py --listing 2
+# verify in Printify editor, then:
+python projects/[niche]/scripts/create-[niche]-listings.py --finalize <product_2_id>
+```
+
+Each design must be verified and finalized independently — designs may have different proportions or y-position.
+
+### Known-good placement values
+
+| Blank | x | y | scale | Verified |
+|---|---|---|---|---|
+| Gildan 5000 | 0.5 | 0.547735567085003 | 0.8777092933600811 | 2026-05-31 |
+
+Add new blanks here as you verify them.
+
+### Gotchas
+- The per-color print_area structure (1 default + 1 per light color) is required for the Printify editor and auto-generated Etsy mockups to show the correct ink color — a simple 2-group split renders invisible white ink on light shirts in the editor
+- Always include `decoration_method: "dtg"` in every placeholder — Printify silently drops images if this field is missing (no error returned)
+- Use the product's own variant list when building print_areas — Printify adds ~7 discontinued variants after creation that don't appear in the catalog endpoint
+- `--finalize` detects the outlier placement via `collections.Counter` — you only need to adjust placement once in the visual editor on any single variant; `--finalize` propagates it everywhere
+- If a product returns 404 immediately after creation, it's a Printify server hiccup — re-run `--listing N`
 
 ---
 
@@ -456,13 +498,16 @@ Track weekly: revenue, Printify costs, Etsy fees, ad spend, subscriptions.
 ## Repeating for a New Niche
 
 Everything in `/shared/` carries over:
+- `printify_core.py` — the Printify API library; import it in every new niche creation script
 - `supplier-notes.md` — placement values for blanks you've already verified
 - `etsy-seo-rules.md` — Etsy title/tag rules
+- `knowledge/strategies-reference.md` — POD strategies and course insights
 
-For a new niche, just:
+For a new niche:
 1. Create a new folder under `/projects/new-niche-name/`
 2. Start at Phase 1 Research
-3. Reference shared files for placement (if using the same blank)
+3. At Phase 5, create a new niche script at `projects/[new-niche]/scripts/create-[new-niche]-listings.py` that imports `printify_core`
+4. Reference `supplier-notes.md` for placement if using the same blank (Gildan 5000 values already verified)
 
 ---
 
@@ -476,4 +521,6 @@ For a new niche, just:
 | eRank | Real Etsy search volume data | You log in; AI extracts data |
 | `research-competitors.py` | Scrape best-seller Etsy listings into scrapes/ | `python3 scripts/research-competitors.py --niche X --query "Y"` |
 | `generate-competitor-report.py` | Build two-tab HTML report from competitors.json + market-insights.md | `python3 scripts/generate-competitor-report.py --niche X` |
+| `calculate_placement.py` | Calculate x/y/scale from design image dimensions + print area | `python3 scripts/calculate_placement.py --product_id X` or `--manual W H` |
+| `printify_core.py` | Shared Printify API library — all niche creation scripts import this | `import printify_core as pc` (imported from `shared/`) |
 | `extract-competitors-prompt.md` | Schema + rules for building competitors.json | Paste to Claude alongside the scrape manifest |

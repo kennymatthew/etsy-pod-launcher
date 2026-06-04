@@ -26,8 +26,8 @@ Launch a print-on-demand product on Etsy using AI to handle research, listing co
 Phase 1 → Research      Find out what's selling and what keywords buyers use
 Phase 2 → Design        Create the print file based on research
 Phase 3 → Mockups       Research + build proven Etsy listing photos
-Phase 4 → Printify      Create products, set placement, reduce variants
-Phase 5 → Listing       Write title, tags, description, and price
+Phase 4 → Listing       Write title, tags, description, and price
+Phase 5 → Printify      Create products via script, verify placement, finalize
 Phase 6 → Sample        Order one shirt to check quality before going live
 Phase 7 → Go Live       Publish to Etsy, set sale, configure automations
 Phase 8 → Diagnostics   Fix the right thing based on which metric is broken
@@ -63,24 +63,22 @@ flowchart TD
         M4[Composite design onto mockup\nBuild 5-10 listing photos]
     end
 
-    subgraph P3 [Phase 4 · Printify Setup]
-        PR1[Create ONE product in\nPrintify with your design] --> PR2
-        PR2[Set placement visually\nin Printify editor] --> PR3
-        PR3[Read exact placement\nvia API — x · y · scale] --> PR4
-        PR4[Save values to\nsupplier-notes.md] --> PR5
-        PR5[Create remaining products\nsame design, different names] --> PR6
-        PR6[Copy verified placement\nto all products via API] --> PR7
-        PR7[Reduce to ≤100 variants\nfor Etsy cap via API]
+    subgraph P3 [Phase 4 · Listing]
+        L1[Write title · tags · description\nbased on keyword research] --> L2
+        L2[Review listing-strategy.html\n6-tab listing decisions doc] --> L3
+        L3[Approve listing-preview.html\nEtsy preview + Printify setup] --> L4
+        L4[Price: list = cost × 5\npermanent 50% off sale]
     end
 
-    subgraph P4 [Phase 4 · Listing]
-        L1[Write title\nfront-load top keyword] --> L2
-        L2[Set 13 Etsy tags\nhighest search vol first] --> L3
-        L3[Write description\nkeyword-rich template] --> L4
-        L4[Set pricing\nlist = cost × 5, permanent 50% off sale]
+    subgraph P4 [Phase 5 · Printify Setup]
+        PR1[Create niche script importing\nprintify_core from /shared/] --> PR2
+        PR2[Run --listing 1 → creates draft\n+ per-color print_areas] --> PR3
+        PR3[Verify placement in\nPrintify visual editor] --> PR4
+        PR4[Run --finalize product_id\nsyncs placement to all print_areas] --> PR5
+        PR5[Repeat --listing N\nfor each remaining design]
     end
 
-    subgraph P5 [Phase 5 · Sample]
+    subgraph P5 [Phase 6 · Sample]
         S1[Order sample from Printify\n~$10–15 shipped to you] --> S2
         S2{Print quality OK?\nSizing correct?}
         S2 -->|Yes| P6
@@ -88,7 +86,7 @@ flowchart TD
         S3[Adjust design or\nplacement and retry] --> S1
     end
 
-    subgraph P6 [Phase 6 · Go Live]
+    subgraph P6 [Phase 7 · Go Live]
         G1[Publish from Printify\nto Etsy] --> G2
         G2[Add mockup photos\nto listing] --> G3
         G3[Run 20% launch sale\nfor first 60 days] --> G4
@@ -115,7 +113,7 @@ flowchart TD
 | Fix print placement | | ✅ Reads + copies via API |
 | Reduce variants to ≤100 | | ✅ Via API |
 | Write title + tags | | ✅ Based on real keyword data |
-| Calculate pricing | | ✅ Cost × 2.5 formula |
+| Calculate pricing | | ✅ Cost × 5 list / 50% sale |
 | Order sample | ✅ | |
 | Publish to Etsy | ✅ One click in Printify | |
 | Review performance | ✅ Monthly check-in | ✅ Helps interpret data |
@@ -142,13 +140,16 @@ flowchart TD
     tags.md               ← all 13 Etsy tags
     pricing.md            ← margin calculations
     listing-snapshot.md   ← what's actually live vs. draft (source of truth for push status)
-  scripts/                ← project-specific API scripts (hardcoded product IDs etc.)
+    listing-strategy.html ← 6-tab decision doc (Strategy, Titles, Tags, Price, Colors, Personalization); generated before creation script runs
+    listing-preview.html  ← Etsy listing preview + Printify setup; final approval gate before creation script
+  scripts/                ← project-specific API scripts (e.g. create-[niche]-listings.py; imports printify_core)
   05-live/
     listings.md           ← published Etsy URLs
   06-performance/
     metrics.md            ← monthly views/sales log
 
 /shared/
+  printify_core.py        ← reusable Printify API library; imported by all niche creation scripts
   supplier-notes.md       ← Printify placement values per blank (reuse across projects)
   etsy-seo-rules.md       ← Etsy title/tag rules
   knowledge/              ← POD research, course insights, strategy reference
@@ -159,6 +160,7 @@ flowchart TD
 /scripts/
   research-competitors.py      ← shared tool: scrapes Etsy competitors via Firecrawl
   generate-competitor-report.py ← generates two-tab competitor-report.html from competitors.json + market-insights.md (any niche)
+  calculate_placement.py       ← calculates x/y/scale from design image + print area dimensions; supports calibration and JSON output
   extract-competitors-prompt.md ← paste to Claude when building competitors.json from scrapes
 ```
 

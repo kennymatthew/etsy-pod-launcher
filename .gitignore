@@ -12,6 +12,12 @@ projects/*/
 # Playwright MCP session logs
 .playwright-mcp/
 
+# Root-level session files (screenshots + scratch files from working sessions)
+/*.png
+/*.jpg
+/*.jpeg
+/*.txt
+
 # macOS
 .DS_Store
 

@@ -9,6 +9,27 @@ Version numbering:
 
 ---
 
+## [v1.3.0] — 2026-06-04
+
+### Added
+- `shared/printify_core.py` — reusable Printify API library imported by all niche creation scripts; functions: `load_env`, `configure`, `api`, `upload_image`, `get_variant_groups`, `build_variants`, `build_initial_print_areas`, `rebuild_print_areas_dark_light`, `get_product_placement`, `sync_placement_across_print_areas`, `create_product`, `reprice`, `usd`
+- `scripts/calculate_placement.py` — calculates x/y/scale from design image dimensions + print area pixel dimensions; supports calibration from known-good values, comparison tables across multiple designs, and JSON output
+- `projects/[niche]/scripts/create-[niche]-listings.py` pattern — per-niche creation script that imports `printify_core`; `--listing N` creates one design at a time; `--finalize <product_id>` syncs verified placement to all print_areas
+- `04-listing/listing-strategy.html` — 6-tab decision doc consolidating all listing copy (Strategy, Titles, Tags, Price, Colors, Personalization); generated in Phase 4 before the creation script runs
+- `04-listing/listing-preview.html` — 3-tab final approval checkpoint (one tab per design showing exact Etsy listing view + one Printify Setup tab); must be approved before running the creation script
+
+### Changed
+- **Workflow phase order** — Phase 4 is now "Listing" (write copy → listing-strategy.html → listing-preview.html approval); Phase 5 is now "Printify" (script-driven product creation); listing copy must be finalized before the creation script runs since title/description are baked in
+- `WORKFLOW.md` Phase 5 — completely rewritten as script-driven flow: `--listing N` to create each design, verify placement in editor, `--finalize <product_id>` to sync; replaces manual UI approach
+- `WORKFLOW.md` Phase 2.3 — updated design file naming to `design[N]-black.png` / `design[N]-white.png` (was `design-name-black.png` / `design-name-offwhite.png`)
+- `README.md` — updated Phase 4/5 flowchart and phase list to reflect new order; fixed "Cost × 2.5" → "Cost × 5 list / 50% sale" in What AI Does table; added new files to folder structure
+
+### Technical notes
+- Per-color print_area structure: 1 default print_area (all non-light colors, white-ink design) + 1 per light color (black-ink design) — mirrors Printify's "Make a specific design for [color]" UI feature; required for the editor and auto-generated Etsy mockups to show correct ink color per shirt color
+- `sync_placement_across_print_areas()` uses `collections.Counter` to identify the outlier placement (the print_area the user edited in the visual editor) and pushes it to all print_areas — you only need to adjust placement once
+
+---
+
 ## [v1.2.0] — 2026-06-03
 
 ### Added
