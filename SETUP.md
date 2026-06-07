@@ -11,6 +11,7 @@ Complete these steps once before you start your first niche.
 | Claude Code | https://claude.ai/code | Your AI assistant — runs the whole workflow |
 | Printify | https://printify.com | Creates + ships your products |
 | Etsy | https://etsy.com/sell | Where you sell |
+| Etsy Developer | https://www.etsy.com/developers | API key for listing creation dates |
 | eRank | https://erank.com | Real keyword search volumes for Etsy |
 | Firecrawl | https://www.firecrawl.dev | Scrapes competitor listings |
 
@@ -63,6 +64,11 @@ npm install
    curl -H "Authorization: Bearer YOUR_TOKEN" https://api.printify.com/v1/shops.json
    ```
 
+### Etsy API key
+1. Go to https://www.etsy.com/developers/your-apps
+2. Click **Create a New App** — fill in any name and description
+3. Copy the **Keystring** from the app detail page (pending approval is fine — the key works once approved)
+
 ### Firecrawl API key
 1. Log in to Firecrawl → https://www.firecrawl.dev/app/api-keys
 2. Click **Create API Key**
@@ -76,12 +82,13 @@ npm install
 cp .env.example .env
 ```
 
-Open `.env` and fill in your three values:
+Open `.env` and fill in your four values:
 
 ```
 PRINTIFY_API_TOKEN=your_token_here
 PRINTIFY_SHOP_ID=your_shop_id_here
 FIRECRAWL_API_KEY=fc-your_key_here
+ETSY_API_KEY=your_etsy_keystring_here
 ```
 
 ---

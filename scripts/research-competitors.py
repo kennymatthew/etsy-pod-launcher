@@ -13,7 +13,8 @@ Usage:
   python3 scripts/research-competitors.py --niche dad-shirt --query "custom dad shirt" --count 10
 """
 
-import subprocess, json, re, argparse, datetime, os, shutil, sys, urllib.parse
+import subprocess, json, re, argparse, datetime, os, shutil, sys, urllib.parse, time
+import urllib.request
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -45,6 +46,39 @@ def load_env():
     return env
 
 ENV = load_env()
+
+def fetch_creation_dates(listing_ids, api_key):
+    """
+    Fetch original_creation_timestamp for each listing from Etsy API v3.
+    Returns dict of {listing_id: "YYYY-MM-DD"} for successful lookups.
+    Skips silently on any error (API key pending, rate limit, etc.).
+    """
+    if not api_key or api_key == 'your_etsy_keystring_here':
+        print("  ⚠ ETSY_API_KEY not set — skipping creation date lookup (will use oldest visible review date as fallback)")
+        return {}
+
+    results = {}
+    print(f"  Fetching creation dates from Etsy API for {len(listing_ids)} listings...")
+    for i, lid in enumerate(listing_ids):
+        try:
+            req = urllib.request.Request(
+                f"https://openapi.etsy.com/v3/application/listings/{lid}",
+                headers={"x-api-key": api_key}
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+            ts = data.get('original_creation_timestamp') or data.get('creation_timestamp')
+            if ts:
+                results[lid] = datetime.date.fromtimestamp(int(ts)).isoformat()
+        except Exception:
+            pass
+        if i < len(listing_ids) - 1:
+            time.sleep(0.15)  # stay well under rate limits
+
+    found = len(results)
+    print(f"  ✓ Got creation dates for {found}/{len(listing_ids)} listings" if found else "  ⚠ No creation dates returned — API key may still be pending approval")
+    return results
+
 
 def build_etsy_search_url(query):
     """Build Etsy best-seller search URL: US sellers, physical items, best sellers only."""
@@ -88,8 +122,49 @@ def scrape_search_page(query, scrapes_dir):
     print(f"  Found {len(listing_urls)} listings")
     return url, listing_urls
 
+def scrape_listing_with_scroll(url, output, api_key):
+    """
+    Retry a listing scrape via Firecrawl REST API with explicit scroll actions.
+    Used when the CLI scrape didn't capture the ## Reviews for this item section
+    (Etsy lazy-loads reviews on scroll; the CLI headless browser never scrolls).
+    Returns True if markdown was saved successfully.
+    """
+    payload = json.dumps({
+        "url": url,
+        "onlyMainContent": True,
+        "waitFor": 2000,
+        "actions": [
+            {"type": "scroll", "direction": "down", "amount": 3000},
+            {"type": "wait", "milliseconds": 1000},
+            {"type": "scroll", "direction": "down", "amount": 3000},
+            {"type": "wait", "milliseconds": 1000},
+            {"type": "scroll", "direction": "down", "amount": 5000},
+            {"type": "wait", "milliseconds": 1500},
+        ]
+    }).encode()
+
+    req = urllib.request.Request(
+        "https://api.firecrawl.dev/v1/scrape",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            data = json.loads(resp.read())
+        markdown = (data.get("data") or {}).get("markdown", "")
+        if markdown and len(markdown) > 500:
+            output.write_text(markdown)
+            return True
+    except Exception as e:
+        print(f"    scroll-retry API error: {e}")
+    return False
+
+
 def scrape_one_listing(args):
-    url, idx, scrapes_dir = args
+    url, idx, scrapes_dir, api_key = args
     listing_id = re.search(r'/listing/(\d+)/', url).group(1)
     output = scrapes_dir / f'etsy-listing-{listing_id}.md'
 
@@ -108,13 +183,25 @@ def scrape_one_listing(args):
         print(f"  [{idx+1}] ✗         — {listing_id} (empty)")
         return url, None, False
 
-    content_start = output.read_text()[:500].lower()
-    if 'this item is unavailable' in content_start:
+    content = output.read_text()
+    if 'this item is unavailable' in content[:500].lower():
         output.unlink()
         print(f"  [{idx+1}] ✗         — {listing_id} (unavailable)")
         return url, None, False
 
-    print(f"  [{idx+1}] ✓         — {listing_id}")
+    # If the reviews section is missing, Etsy lazy-loaded it on scroll.
+    # Retry via REST API with explicit scroll actions to capture it.
+    if '## Reviews for this item' not in content and api_key:
+        print(f"  [{idx+1}] retrying  — {listing_id} (no reviews section, scrolling...)")
+        if scrape_listing_with_scroll(url, output, api_key):
+            has_reviews = '## Reviews for this item' in output.read_text()
+            status = "reviews captured" if has_reviews else "still no reviews section"
+            print(f"  [{idx+1}] ✓         — {listing_id} ({status})")
+        else:
+            print(f"  [{idx+1}] ✓         — {listing_id} (scroll retry failed, keeping original)")
+    else:
+        print(f"  [{idx+1}] ✓         — {listing_id}")
+
     return url, str(output), True
 
 def main():
@@ -133,7 +220,7 @@ def main():
     print(f"Scrapes: projects/{args.niche}/01-research/scrapes/\n")
 
     # Step 1: scrape the Etsy best-seller search page
-    print("Step 1/2  Scraping Etsy best-seller search page...")
+    print("Step 1/3  Scraping Etsy best-seller search page...")
     search_url, listing_urls = scrape_search_page(args.query, scrapes_dir)
 
     if not listing_urls:
@@ -145,11 +232,12 @@ def main():
         print(f"  Limiting to {args.count} listings (--count flag)")
 
     # Step 2: scrape each listing individually
-    print(f"\nStep 2/2  Scraping {len(listing_urls)} listings in parallel (max 3 concurrent)...")
+    print(f"\nStep 2/3  Scraping {len(listing_urls)} listings in parallel (max 3 concurrent)...")
     raw_results = []
+    firecrawl_api_key = ENV.get('FIRECRAWL_API_KEY', '')
     with ThreadPoolExecutor(max_workers=3) as ex:
         futures = {
-            ex.submit(scrape_one_listing, (url, i, scrapes_dir)): i
+            ex.submit(scrape_one_listing, (url, i, scrapes_dir, firecrawl_api_key)): i
             for i, url in enumerate(listing_urls)
         }
         for future in as_completed(futures):
@@ -157,6 +245,14 @@ def main():
 
     raw_results.sort(key=lambda r: listing_urls.index(r[0]) if r[0] in listing_urls else 99)
     scraped = [(url, path) for url, path, ok in raw_results if ok and path]
+
+    # Step 3: fetch listing creation dates from Etsy API
+    scraped_ids = [re.search(r'/listing/(\d+)/', u).group(1) for u, _ in scraped]
+    print(f"\nStep 3/3  Fetching listing creation dates from Etsy API...")
+    creation_dates = fetch_creation_dates(scraped_ids, ENV.get('ETSY_API_KEY', ''))
+    dates_path = scrapes_dir / 'listing-dates.json'
+    dates_path.write_text(json.dumps(creation_dates, indent=2))
+    print(f"  Saved to scrapes/listing-dates.json ({len(creation_dates)} entries)")
 
     # Save manifest
     manifest = {

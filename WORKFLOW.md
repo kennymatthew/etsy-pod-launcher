@@ -23,15 +23,81 @@ How to trigger: tell Claude *"use a sub-agent to..."* or *"spawn an Explore/gene
 
 ---
 
+## Phase 0 · Niche Discovery
+
+**Goal:** Confirm a niche has real buyer demand and a viable entry window before running Phase 1.
+Run Phase 0 for every new niche — it takes 15 minutes and prevents wasting Phase 1 resources on a dead or oversaturated niche.
+
+### 0.1 Etsy Autocomplete — buyer language check (free, 5 min)
+
+Run the autocomplete script:
+```bash
+python3 scripts/research-autocomplete.py --niche your-niche-name --query "your broad keyword"
+```
+
+This opens a fresh US browser session (New York locale, not logged in), types each variant into Etsy's search box, and captures all autocomplete suggestions. Saves to `projects/[niche]/01-research/autocomplete-[query].json`.
+
+Phrases marked ★ in the terminal output appeared across multiple letter variants — those are the highest buyer-intent terms. Use them as your Phase 1 `--query` argument and your Phase 4 keyword starting point.
+
+**Why US context:** Logged-in sessions skew autocomplete toward your history. US context ensures results reflect the US buyer market regardless of where you're physically located.
+
+**Manual fallback (if script fails):** Open etsy.com in an incognito window, not logged in. Type the broad word, record every suggestion. Repeat with the word + each of these letters: a, b, c, f, g, h, s, t.
+
+### 0.2 Cross-niche substitution (free, 2 min)
+
+If you already have a proven design format, list 10 other identity words that slot into it. Prefer less-saturated identities (ICU tech, arborist, disc golf) over dominant ones (nurse, teacher). Run each strong candidate through Step 0.1 to confirm buyer phrases exist.
+
+### 0.3 eRank Keyword Ideas — volume check (1 daily credit, 5 min)
+
+Only spend an eRank credit once Step 0.1 has already produced a strong candidate phrase.
+
+1. In eRank Keyword Tool, enter the top phrase from your autocomplete results.
+2. Scroll to "Keyword Ideas". Sort by competition low → high.
+3. Look for green competition + meaningful volume — these are sub-niche entry points.
+4. Note the top 3 phrases — they become the Phase 1.4 starting point.
+
+### 0.4 Timing check — seasonal niches
+
+Before committing to a seasonal niche, confirm today is at least **35 days before the event**.
+Reference `shared/seasonal-calendar.md` for "start by" dates.
+
+- Within window → proceed
+- Outside window → choose an evergreen niche instead, or start immediately and accept lower ranking on first launch
+
+### 0.5 Optional — Alura top-sellers check (2 min, uses Firecrawl credits)
+
+```bash
+python3 scripts/research-top-sellers.py --niche your-niche-name
+```
+
+Scrapes Alura's public best-selling Clothing page (no login required). Pass the saved markdown to Claude:
+> "Read `top-sellers-clothing-raw.md`, extract each listing row as JSON (rank, title, etsy_url, total_sales, monthly_sales, revenue_estimate). Save to `top-sellers-clothing.json`."
+
+Then search it:
+> "Search top-sellers-clothing.json for [your keyword]. Report how many listings match and their monthly_sales."
+
+- 3+ matches with monthly_sales above 100 → demand confirmed at top-seller level
+- 0 matches → niche may be new or underserved — proceed to Phase 1 but treat as uncertain
+
+**Stability note:** If the scrape returns no sales figures, Alura's page may have changed — fall back to the in-house estimate from `competitors.json` (`estimated_monthly_sales` field).
+
+### Phase 0 output
+
+One confirmed niche keyword that appeared in Etsy autocomplete AND passed an eRank volume check. Only after Phase 0 is complete does Phase 1 begin.
+
+---
+
 ## Phase 1 · Research
 
 **Goal:** Know exactly what's selling before you design anything.
 
 ### 1.1 Create project folder structure
-Tell the AI:
-> "Create the folder structure for a new project called [niche-name]"
 
-It will create `/projects/[niche-name]/01-research/` through `06-performance/`.
+```bash
+python3 scripts/create-project.py --niche your-niche-name
+```
+
+Creates `/projects/[niche]/01-research/` through `05-performance/` plus stub files for `keywords.md` and `brief.md`. Prints next-step commands.
 
 ### 1.2 Scrape competitor listings
 
@@ -46,10 +112,12 @@ This uses Firecrawl to:
 3. Save clean markdown files to `projects/[niche]/01-research/scrapes/`
 4. Write a manifest file at `projects/[niche]/01-research/scrapes/manifest.json`
 
-Then use `scripts/extract-competitors-prompt.md` — paste it to Claude with the instruction:
-> "Read all etsy-listing-*.md files in scrapes/ and build competitors.json using the schema in this prompt"
+Run the extraction script:
+```bash
+python3 scripts/extract-competitors.py --niche your-niche-name
+```
 
-Claude (ideally via sub-agent) reads every scraped page and extracts:
+This reads every scraped page in `scrapes/` and extracts:
 - Price range, rating, review count, sales count
 - Title keywords
 - All colors listed in the dropdown
@@ -60,53 +128,103 @@ Claude (ideally via sub-agent) reads every scraped page and extracts:
 - First product image URL
 - Shop name, Star Seller status, ships from
 
-After competitors.json is built, generate the visual HTML report:
+The script runs a self-check after extraction and warns on: duplicate image URLs, arithmetic inconsistencies, date sanity errors, schema completeness gaps, and cross-listing data leakage. Fix any warnings before proceeding.
+
+**Output:** `01-research/scrapes/etsy-listing-*.md` (raw) + `01-research/competitors.json` (structured)
+
+### 1.3 Research competitor shops
+
 ```bash
-python3 scripts/generate-competitor-report.py --niche your-niche-name
+python3 scripts/research-shops.py --niche your-niche-name
 ```
 
-This creates `projects/[niche]/01-research/competitor-report.html` — a self-contained two-tab HTML report. After this step, **Tab 2 (Competitor Report)** is live: card grid with 8 category filters, demand badges (🔥 In 20+ carts), product images, and sort by price/reviews/rating.
+Auto-detects the top shops from `competitors.json` and scrapes their shop pages. Builds `shop-watchlist.json` with three independent monthly sales estimates per shop (M1 lifetime average, M2 current momentum, M3 listing rollup). Used for the Niche Verdict and Tab 3 Shop Intelligence.
 
-**Tab 1 (Market Insights)** shows a placeholder until market-insights.md is written in Phase 1.3, then regenerate to populate it.
+**Output:** `01-research/shop-watchlist.json`
 
-**Output:** `01-research/scrapes/etsy-listing-*.md` (raw) + `01-research/competitors.json` (structured) + `01-research/competitor-report.html` (visual, Tab 2 only at this stage)
+### 1.4 Get keyword search volumes from eRank
 
-**Note:** Always regenerate the HTML report after updating competitors.json — the HTML inlines the JSON data and goes stale if edited separately.
+*(Step numbering continues below — eRank is step 1.4 in the original workflow. Steps are reordered here for clarity.)*
 
-### 1.3 Extract market insights
-Tell the AI:
-> "Analyse competitors.json and write market-insights.md — what colors, sizes, and prices are most common? What gaps exist?"
+See section 1.4 below.
+
+### 1.5 Build patterns-config.json (in conversation with Claude)
+
+After `competitors.json` exists, tell Claude:
+> "Read competitors.json for [niche] and propose a patterns-config.json — group the listings into 4–7 visually distinct design patterns based on titles and descriptions."
+
+Claude will read the titles and descriptions, identify recurring themes, and propose a `patterns-config.json` with keyword rules. Review and approve the config before saving it to `projects/[niche]/01-research/patterns-config.json`.
+
+**This is a conversation step, not a script.** The config is created once per niche and reused on every report regeneration.
+
+**Mandatory self-check before finalising (Claude must do this):**
+
+After proposing the initial patterns, Claude must run the classification against `competitors.json` and report:
+1. How many listings fall into each pattern (including P0)
+2. If P0 > 15% of total listings — STOP. Print all P0 listing titles and investigate for hidden sub-patterns before saving the config. Common hiding spots: personalization style (photo vs name-only), product type outliers (non-shirt products), seasonal/holiday angles, cross-niche designs (e.g. plant+dog, books+dog).
+3. Only save `patterns-config.json` after P0 is ≤ 15% OR after explicitly confirming each remaining P0 listing is genuinely uncategorizable and noting why.
+
+**Personalization signal check (run this every time):**
+
+Count titles containing any of: `personalized`, `personalize`, `custom pet`, `photo and name`, `pet photo`, `with names`, `with photo`. If 3 or more listings match → propose a Custom Personalization pattern. Fewer than 3 → skip it, not a meaningful segment in this niche.
+
+**Output:** `01-research/patterns-config.json`
+
+### 1.6 Write market-insights.md
+
+Read and follow the locked prompt exactly:
+```
+scripts/prompts/write-market-insights-prompt.md
+```
+
+The prompt covers required sections, source tagging rules, and a self-check. Do not skip the self-check — it catches missing or unformatted tags before the HTML is generated.
+
+**Do NOT write a "Top Design Patterns" prose section** — it is replaced by the visual from `patterns-config.json`.
 
 **Output:** `01-research/market-insights.md`
 
-After market-insights.md is written, regenerate the HTML report:
+### 1.7 Generate the complete report
+
+Once all inputs exist (`competitors.json`, `market-insights.md`, `shop-watchlist.json`, `patterns-config.json`), run once:
+
 ```bash
 python3 scripts/generate-competitor-report.py --niche your-niche-name
 ```
 
-This populates **Tab 1 (Market Insights)** with:
-- A top-performing listings strip (top 8 by reviews, all product types, scrollable with images)
-- The full market-insights.md rendered as styled HTML
-- Every listing ID in the text auto-linked to a small image chip (hover = title + price, click = Etsy listing)
-- Source label dots inline (`●` green = our data, `●` blue = inferred, `●` gray = market knowledge) — click "Show labels" in the legend to expand to full pills
+This produces `competitor-report.html` — a self-contained three-tab HTML report:
 
-**Output:** `01-research/competitor-report.html` (both tabs now fully populated)
+**Tab 1 (Market Insights):**
+- Top-performing listings strip (top 8 by EMS, scrollable with images)
+- Niche Verdict (from market-insights.md)
+- **Design Patterns visual** — Netflix-style horizontal scroll rows, one per pattern (from patterns-config.json + competitors.json), listed in no particular order
+- Sections 1–10 from market-insights.md
+- Source label dots (● green = our data, ● blue = inferred, ● gray = market knowledge) — click "Show labels" to expand
+
+**Tab 2 (Competitor Report):** Card grid with 8 category filters, demand badges, product images, sort by price/reviews/rating/EMS.
+
+**Tab 3 (Shop Intelligence):** M1/M2/M3 monthly sales estimates per shop, trend signal, confidence.
+
+**Output:** `01-research/competitor-report.html` (all three tabs fully populated)
 
 **Source labeling rule (applies to every market-insights.md):**
-Every claim must be tagged with its source. Use these inline tags:
+Every sentence that makes a claim must be tagged with a backtick-wrapped source label. Tags without backticks render as plain text — the color dots will not appear.
 
-| Tag | Meaning |
+| Write it as | Meaning |
 |---|---|
-| `[our data]` | Directly observed in competitors.json, keywords.md, or other scraped files |
-| `[inferred]` | Logical conclusion drawn from our data — not directly observed |
-| `[market knowledge]` | General POD/Etsy knowledge from AI training data — not verified for this niche |
+| `` `[our data]` `` | Directly observed in competitors.json, keywords.md, or other scraped files |
+| `` `[inferred]` `` | Logical conclusion drawn from our data — not directly observed |
+| `` `[market knowledge]` `` | General POD/Etsy knowledge from AI training data — not verified for this niche |
+
+Rules:
+- Tag every sentence — not just section endings or paragraph endings
+- Never use hybrid tags (`[our data + inferred]`) — split into two separately tagged sentences
+- Bullet list items and table Notes cells each need their own tag
+- After saving, click "Show labels" in the HTML report and verify colored dots appear throughout — if a section has no dots, a tag is missing or backticks are missing
 
 Gap/opportunity sections must include a confidence column in any summary table:
-- ✅ High — backed by `[our data]`
-- ⚠️ Medium — `[inferred]` or partially backed
-- ❌ Low — primarily `[market knowledge]`, demand unverified
-
-Never mix data and inference without flagging which is which.
+- ✅ High — backed by `` `[our data]` ``
+- ⚠️ Medium — `` `[inferred]` `` or partially backed
+- ❌ Low — primarily `` `[market knowledge]` ``, demand unverified
 
 ### 1.5 Validate your slogan/phrase (sub-niche check)
 Before designing anything, search the **exact phrase** your design will use on Etsy.
@@ -125,10 +243,23 @@ If no shops → untested demand, research more before committing.
 2. Tell the AI: *"I'm logged into eRank, help me research keywords"*
 3. AI uses Playwright to extract search volume data from the eRank table
 4. Run searches for: your main keyword, variations, and long-tail phrases
+5. **While already in eRank, record trend direction for each keyword.** Look for a trend line or graph below the search volume number. Add a `Trend` column to the keyword table in `keywords.md`:
+
+   ```
+   Trend: [keyword] → Rising | Stable | Declining | Seasonal (peak: [month]) | Unknown (graph locked on free plan)
+   ```
+
+   **If the trend graph is locked on free plan:** check eRank's "Top 10 Trending Keywords" list — if your main keyword appears there, mark it Rising.
+
+   **Apply this adjustment when writing the Niche Verdict:**
+   - Main keyword trending **Rising** → upgrade Demand Signal one level (Low → Medium, Medium → High)
+   - Main keyword trending **Declining** → downgrade Demand Signal one level (High → Medium, Medium → Low)
+   - Main keyword trending **Seasonal** → note the peak month in the Verdict basis line
+   - **Unknown** → leave Demand Signal unadjusted, note the gap in Verdict confidence
 
 **Free plan limit:** 5 searches per day — plan which keywords matter most before you start.
 
-**Output:** Data added to `01-research/keywords.md`
+**Output:** Data added to `01-research/keywords.md` including a Trend column for each keyword.
 
 ### Gotchas
 - eRank free tier shows search volume for the main keyword but locks competition data with "xxx" — that's fine, volume is what matters most
@@ -136,9 +267,57 @@ If no shops → untested demand, research more before committing.
 
 ---
 
+## ⛔ Stop Check — Niche Verdict (Phase 1.3 + 1.4 must be complete first)
+
+**Do not start Phase 2 until the Niche Verdict is written and the Recommendation is "Enter" or "Enter with sub-niche pivot".**
+
+Both inputs must be ready before running this:
+- `competitors.json` complete (Phase 1.2 done — provides `estimated_monthly_sales` and `reviews_per_month`)
+- `keywords.md` trend column filled in (Phase 1.4 done — provides trend direction for Demand Signal adjustment)
+
+Run the verdict script:
+```bash
+python3 scripts/generate-niche-verdict.py --niche your-niche-name
+```
+
+This reads `competitors.json` and `keywords.md`, computes all the math (EMS rankings, 15/month check, RPM distribution, trend adjustment), and outputs a pre-filled verdict block. The only things left to fill in are the one-sentence reasoning lines marked `[FILL IN]`.
+
+Paste the output at the **top of `market-insights.md`**, fill in the `[FILL IN]` lines, then remove the generator note at the bottom.
+
+**Read the Recommendation field:**
+
+| Recommendation | Action |
+|---|---|
+| **Enter** | Proceed to Phase 2 |
+| **Enter with sub-niche pivot** | Update the niche angle in `02-design/brief.md` before Phase 2. Do not design for the original broad niche. |
+| **Do not enter** | Stop. Start a new project folder for a different niche or the recommended sub-niche. Do not proceed to Phase 2. |
+
+---
+
 ## Phase 2 · Design
 
 **Goal:** A print-ready design file based on research.
+
+### 2.0 Lock product + print provider (do this before any design work)
+
+**Do not write a brief or touch Canva until this step is complete.** The blank determines the mockup template, color palette, and pricing floor — changing it after mockups means redoing everything.
+
+1. Check `competitors.json` → look at the `blank` field for the top 3 listings by `estimated_monthly_sales`. If the majority share one blank, start there. If mixed, default to Gildan 5000.
+2. Run the cost comparison:
+   ```bash
+   python3 scripts/fetch-pp-costs.py --blueprint <id>
+   # Find blueprint IDs:
+   python3 scripts/fetch-pp-costs.py --list-blueprints --search "gildan"
+   ```
+3. Pick the print provider with the lowest avg cost at quality 4.5+, preferring US-based. See `shared/pp-selection-guide.md` for the full decision criteria.
+4. Confirm margin: `avg_cost × 2.5 ≤ market price ceiling` from Phase 1. If it fails, try a cheaper PP before switching blanks.
+5. Record the selection at the top of `02-design/brief.md`:
+   ```
+   Blank: [name]  |  Blueprint ID: [id]  |  Print Provider: [name] (ID: [id])
+   Avg cost: $[X]  |  List price: $[Y]  |  Margin: [Z]%
+   ```
+
+**Output:** Lock block written at top of `02-design/brief.md`.
 
 ### 2.1 Write a design brief
 Tell the AI:
@@ -186,10 +365,9 @@ Save both files to `02-design/print-files/`.
 Alek: *"The mockup image is just as important as the design you make. If you don't get the mockup right, your product is absolutely never going to sell."*
 
 ### 3.1 Research winning mockup styles
-1. Search Etsy for your product + niche (e.g. "save the date shirt")
-2. Open eRank → Listing View — this overlays an outlier score on each listing (how many times better it sells vs. other listings in the same shop)
-3. Look for listings with high outlier scores (e.g. 7×, 30×, 110×) — note what mockup style those listings use
-4. Also check your competitors.json — what mockup styles are those top sellers using?
+1. Check the **Recommended Mockup Style** section in `01-research/market-insights.md` — this is derived from the Phase 1 competitor scrape (`mockup_style` field) and is the primary input for slot 1. Use it as your starting point.
+2. If the majority of entries are `unknown` (description text had no signals), fall back to the manual method: open eRank → Listing View, overlay outlier scores, and note what style the high-outlier listings use.
+3. You may still browse eRank Listing View to confirm the scraped recommendation — but scraped data takes precedence over visual browsing.
 
 ### 3.2 Source the mockup pack
 - Search Etsy directly for the mockup style you found (e.g. "comfort colors sage mockup flatlay")
@@ -230,53 +408,43 @@ Save finished listing photos to `03-mockups/`.
 
 > **Do Phase 4 before Phase 5.** The Printify creation script bakes in your finalized title and description. Complete listing copy here first, then create the products in Phase 5.
 
-### 4.1 Title
-Tell the AI:
-> "Write title options for this listing based on the eRank keyword data"
+### 4.1–4.3 Title, Tags, and Description
 
-Rules:
-- 140 character max
-- **First ~30 characters** = human-readable product name (what buyers see truncated in search results)
-- **Most-searched keyword must be first** (eRank tells you which one) — balance this with readability in the first 30 chars
-- Comma-separated keyword stacking (what all top sellers do)
-- Use all 140 characters
+These three outputs are produced together from one locked prompt.
 
-**Output:** `04-listing/titles.md`
+**Prerequisites — must all exist before running:**
+- `01-research/competitors.json` (Phase 1.2 complete)
+- `01-research/keywords.md` with Trend column filled in (Phase 1.4 complete)
+- `01-research/market-insights.md` with Niche Verdict (Stop Check passed)
+- `02-design/brief.md` with Lock block filled in (Phase 2.0 complete)
 
-### 4.2 Tags (13 max, 20 characters each)
-Tell the AI:
-> "Write the 13 Etsy tags based on the keyword research, ordered by search volume"
+**Run:**
+Paste `scripts/prompts/write-listing-copy-prompt.md` to Claude with:
+> "Follow this prompt exactly. Niche: [niche-name]."
 
-Rules:
-- Tag 1 = highest search volume keyword
-- Use multi-word phrases, not single words
-- Don't repeat words unnecessarily across tags — cover different search angles
+The prompt instructs Claude to read all four prerequisite files, then produce three output files with built-in self-checks (character counts, keyword placement, structure validation). No vague instructions — the prompt is fully specified.
 
-**Output:** `04-listing/tags.md`
+**Outputs:**
+- `04-listing/titles.md` — 3 options with character counts; recommended pick highlighted
+- `04-listing/tags.md` — 13 tags ordered by search volume with source column
+- `04-listing/descriptions.md` — full structured description
 
-### 4.3 Description
-Tell the AI:
-> "Write a full Etsy description using the keyword-anchored template"
-
-Structure used by all top sellers:
-1. Emotional hook (1-2 lines)
-2. Feature bullet points
-3. How to order (numbered steps — reduces buyer questions)
-4. Sizing guidance (reduces returns)
-5. Product specs (material, print method)
-6. "Perfect for" list
-7. Shipping & production time
-8. Care instructions
-
-**Output:** `04-listing/descriptions.md`
+**Rules (enforced by the prompt):**
+- Title: 140 chars max; top keyword in first 30 chars; comma-separated stacking
+- Tags: 20 chars max each; tag 1 = highest-volume keyword; multi-word phrases only
+- Description: opens with emotional hook; uses top 3 keywords naturally; no "unique" or "quality"
 
 ### 4.4 Pricing
-Tell the AI:
-> "Pull the Printify base costs from the API and calculate prices at 60% margin"
+
+```bash
+python3 scripts/fetch-pp-costs.py --blueprint <id> --pp <provider_id>
+```
 
 Formula: **Printify cost × 5 = list price | list ÷ 2 = sell price** (permanent 50% off, always on)
 
 This gives the same 51% net margin as cost×2.5, but the sale badge never disappears — Etsy promotes sale listings continuously in search.
+
+Copy the size/cost table from the script output into `04-listing/pricing.md`.
 
 **Output:** `04-listing/pricing.md`
 
@@ -520,7 +688,12 @@ For a new niche:
 | Printify API | Reading/updating products, placement, variants | AI calls it automatically |
 | eRank | Real Etsy search volume data | You log in; AI extracts data |
 | `research-competitors.py` | Scrape best-seller Etsy listings into scrapes/ | `python3 scripts/research-competitors.py --niche X --query "Y"` |
-| `generate-competitor-report.py` | Build two-tab HTML report from competitors.json + market-insights.md | `python3 scripts/generate-competitor-report.py --niche X` |
+| `generate-competitor-report.py` | Build three-tab HTML report from competitors.json + market-insights.md + shop-watchlist.json + patterns-config.json | `python3 scripts/generate-competitor-report.py --niche X` |
 | `calculate_placement.py` | Calculate x/y/scale from design image dimensions + print area | `python3 scripts/calculate_placement.py --product_id X` or `--manual W H` |
 | `printify_core.py` | Shared Printify API library — all niche creation scripts import this | `import printify_core as pc` (imported from `shared/`) |
-| `extract-competitors-prompt.md` | Schema + rules for building competitors.json | Paste to Claude alongside the scrape manifest |
+| `create-project.py` | Create folder structure + stub files for a new niche | `python3 scripts/create-project.py --niche X` |
+| `extract-competitors.py` | Build competitors.json from scrapes/ — deterministic, self-checking | `python3 scripts/extract-competitors.py --niche X` |
+| `generate-niche-verdict.py` | Compute verdict math from competitors.json + keywords.md; output pre-filled draft | `python3 scripts/generate-niche-verdict.py --niche X` |
+| `prompts/write-market-insights-prompt.md` | Locked prompt for market-insights.md — required sections, source tagging rules, self-check | Paste to Claude: "Follow this prompt exactly. Niche: X." |
+| `prompts/write-listing-copy-prompt.md` | Locked prompt for titles + tags + description — reads 4 input files, enforces character limits | Paste to Claude: "Follow this prompt exactly. Niche: X." |
+| `extract-competitors-prompt.md` | Schema reference + synthesis rules for market-insights.md (read-only reference) | Do not use for extraction — use the Python script |

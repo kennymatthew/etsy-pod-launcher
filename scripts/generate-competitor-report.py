@@ -2,9 +2,13 @@
 """
 generate-competitor-report.py
 
-Generates a self-contained competitor-report.html with two tabs:
-  Tab 1 — Market Insights  (rendered from market-insights.md)
-  Tab 2 — Competitor Report (card grid from competitors.json)
+Generates a self-contained competitor-report.html with three tabs:
+  Tab 1 — Market Insights    (Niche Verdict + Design Patterns visual + market-insights.md sections)
+  Tab 2 — Competitor Report  (card grid from competitors.json)
+  Tab 3 — Shop Intelligence  (M1/M2/M3 table from shop-watchlist.json)
+
+Required inputs before running:
+  competitors.json, market-insights.md, shop-watchlist.json, patterns-config.json
 
 Usage:
   python3 scripts/generate-competitor-report.py --niche personalized-gift-for-dad
@@ -18,6 +22,863 @@ BASE_DIR = Path(__file__).parent.parent
 
 def niche_to_title(niche: str) -> str:
     return niche.replace('-', ' ').title()
+
+
+# ── Design patterns helpers ───────────────────────────────────────────────────
+
+def assign_pattern(entry, patterns):
+    """First-match-wins classification using config array order."""
+    title = (entry.get('title') or '').lower()
+    fallback = 'P0'
+    for p in patterns:
+        pid = p['id']
+        if pid == 'P0':
+            fallback = pid
+            continue
+        for rule in p.get('confirmed_field_rules', []):
+            field_val = entry.get(rule['field'])
+            if field_val == rule['value']:
+                if rule.get('confirmed_only'):
+                    if entry.get(rule['field'] + '_confirmed'):
+                        return pid
+                else:
+                    return pid
+        if any(kw.lower() in title for kw in p.get('keywords', [])):
+            return pid
+    return fallback
+
+
+def dp_ems_color(ems):
+    if ems is None: return '#9ca3af'
+    if ems >= 100:  return '#16a34a'
+    if ems >= 15:   return '#d97706'
+    return '#9ca3af'
+
+
+def escape_html(s):
+    return (s or '').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
+
+
+def _extract_interp_slots(section_text):
+    """Pull interpretation lines from an existing Section 6 block.
+
+    Returns up to 4 slots (verdict, badge commentary, carts commentary,
+    pattern commentary). Slots with [FILL IN] or empty content return ''.
+    """
+    slots = []
+    current = []
+    in_table = False
+
+    for line in section_text.split('\n'):
+        s = line.strip()
+        if s.startswith('|'):
+            in_table = True
+            if current:
+                slots.append(' '.join(current))
+                current = []
+        elif s.startswith('##') or s == '---' or not s:
+            if in_table and current:
+                slots.append(' '.join(current))
+                current = []
+            in_table = False
+        else:
+            if not in_table:
+                current.append(s)
+    if current:
+        slots.append(' '.join(current))
+
+    # Drop lines that are only a source tag (e.g. `` `[our data]` `` standalone)
+    _src_only = re.compile(r'^`\[(our data|inferred|market knowledge)\]`$')
+    cleaned = []
+    for slot in slots:
+        if not slot or '[FILL IN' in slot or _src_only.match(slot):
+            cleaned.append('')
+        else:
+            cleaned.append(slot)
+    while len(cleaned) < 4:
+        cleaned.append('')
+    return cleaned[:4]
+
+
+def update_demand_signals_in_md(md_text, comp_data, patterns_config):
+    """Rewrite Section 6 tables in market-insights.md from live data.
+
+    Preserves existing interpretation lines; leaves [FILL IN] where none exist.
+    Returns the updated markdown string and also writes the file if path given.
+    """
+    patterns = (patterns_config or {}).get('patterns', [])
+    n = len(comp_data)
+
+    # ── Badge counts ─────────────────────────────────────────────────────────
+    badge_counts = {}
+    for e in comp_data:
+        b = e.get('badge') or 'None'
+        badge_counts[b] = badge_counts.get(b, 0) + 1
+
+    bs_count      = badge_counts.get('Bestseller', 0)
+    pick_count    = badge_counts.get("Etsy's Pick", 0)
+    rare_count    = badge_counts.get('Rare find', 0)
+    in_carts_any  = sum(1 for e in comp_data if (e.get('in_carts') or 0) > 0)
+    in_carts_null = sum(1 for e in comp_data if e.get('in_carts') is None)
+
+    pick_shops = ', '.join(
+        f"{e.get('shop_name')} (EMS {e.get('estimated_monthly_sales')})"
+        for e in comp_data if e.get('badge') == "Etsy's Pick"
+    )
+
+    in_demand_listings = [
+        e for e in comp_data
+        if any('In demand' in s for s in (e.get('demand_signals') or []))
+    ]
+    in_demand_detail = ', '.join(
+        f"{e.get('shop_name')} ({re.search(r'(\d+) people', next(s for s in e['demand_signals'] if 'In demand' in s)).group(1)} bought)"
+        for e in in_demand_listings
+        if re.search(r'(\d+) people', next((s for s in e['demand_signals'] if 'In demand' in s), ''))
+    ) or '—'
+
+    # ── In-carts buckets ─────────────────────────────────────────────────────
+    b20  = sum(1 for e in comp_data if (e.get('in_carts') or 0) >= 20)
+    b11  = sum(1 for e in comp_data if 11 <= (e.get('in_carts') or 0) <= 19)
+    b1   = sum(1 for e in comp_data if 1  <= (e.get('in_carts') or 0) <= 10)
+    pct_cap = round(b20 / n * 100) if n else 0
+
+    # ── Pattern breakdown ─────────────────────────────────────────────────────
+    plabel = {p['id']: p['label'] for p in patterns}
+    porder = {p['id']: p.get('display_rank', 99) for p in patterns}
+    groups = {}
+    for e in comp_data:
+        pid = assign_pattern(e, patterns) if patterns else 'P0'
+        groups.setdefault(pid, []).append(e)
+
+    pattern_rows = []
+    for pid, entries in sorted(groups.items(), key=lambda kv: -sum(
+            (e.get('estimated_monthly_sales') or 0) for e in kv[1]) / max(len(kv[1]), 1)):
+        pn = len(entries)
+        pbs   = sum(1 for e in entries if e.get('is_bestseller'))
+        pc    = sum(1 for e in entries if (e.get('in_carts') or 0) > 0)
+        pc20  = sum(1 for e in entries if (e.get('in_carts') or 0) >= 20)
+        pems  = round(sum((e.get('estimated_monthly_sales') or 0) for e in entries) / pn)
+        label = plabel.get(pid, pid)
+        pattern_rows.append(f'| {label} | {pn} | {pbs}/{pn} | {pc}/{pn} | {pc20}/{pn} | {pems} |')
+
+    # ── Find existing interpretation slots ────────────────────────────────────
+    start = md_text.find('\n## 6. Demand Signals Summary')
+    if start == -1:
+        return md_text
+    end_match = re.search(r'\n## [^6\n]', md_text[start + 1:])
+    end = start + 1 + end_match.start() if end_match else len(md_text)
+    existing_section = md_text[start:end]
+    slots = _extract_interp_slots(existing_section)
+
+    fill = '[FILL IN]'
+    v_line   = slots[0] or fill + ' one-sentence verdict on overall demand strength. `[our data]`'
+    b_line   = slots[1] or fill + ' 1–2 sentences on what the zero rows mean for this niche. `[inferred]`'
+    c_line   = slots[2] or f'{pct_cap}% of listings are at the display cap. `[our data]`'
+    p_line   = slots[3] or fill + ' 2–3 sentences on signal-to-competition ratio for new entrants. `[inferred]`'
+
+    pick_note = (
+        f'Not a lesser signal — {pick_shops} `[our data]`'
+        if pick_count else 'Signal exists on Etsy but did not trigger `[our data]`'
+    )
+    rare_note = (
+        'Signal exists on Etsy but did not trigger `[our data]`'
+        if rare_count == 0 else f'{rare_count}/{n} `[our data]`'
+    )
+    high_demand_note = (
+        f'{in_demand_detail} `[our data]`'
+        if in_demand_listings else 'Signal exists on Etsy but did not trigger `[our data]`'
+    )
+
+    new_section = f"""
+## 6. Demand Signals Summary
+
+{v_line}
+
+### Etsy Demand Labels — Full Scan
+
+| Signal | Count | Notes |
+|---|---|---|
+| Bestseller badge | {bs_count}/{n} | Core volume signal — awarded for recent sales + conversion rate `[market knowledge]` |
+| Etsy's Pick badge | {pick_count}/{n} | {pick_note} |
+| In-carts detected | {in_carts_any}/{n} | {in_carts_null} listings returned null — scraper could not read the signal `[our data]` |
+| "In demand. N bought in last 24h" | {len(in_demand_listings)}/{n} | {high_demand_note} |
+| "In high demand" badge | 0/{n} | Signal exists on Etsy but did not trigger `[our data]` |
+| "Rare find" badge | {rare_count}/{n} | {rare_note} |
+
+{b_line}
+
+### In-Carts Heat
+
+| Cart level | Listings | Signal |
+|---|---|---|
+| 20+ (Etsy caps display here) | {b20}/{n} | Hot — real counts likely higher than 20 `[market knowledge]` |
+| 11–19 | {b11}/{n} | Warm |
+| 1–10 | {b1}/{n} | Mild |
+| Not detected (null) | {in_carts_null}/{n} | Unknown — scraper could not read `[our data]` |
+
+{c_line}
+
+### Demand by Pattern Segment
+
+| Pattern | Listings | Bestseller | Carts > 0 | Carts 20+ | Avg EMS |
+|---|---|---|---|---|---|
+{chr(10).join(pattern_rows)}
+
+{p_line}
+
+---
+"""
+    return md_text[:start] + new_section + md_text[end:]
+
+
+def build_design_patterns_section(comp_data, config):
+    """Build the Netflix-rows design patterns block for Tab 1."""
+    patterns = config.get('patterns', [])
+    if not patterns:
+        return ''
+
+    pattern_map   = {p['id']: p for p in patterns}
+    display_sorted = sorted(patterns, key=lambda p: p.get('display_rank', 99))
+    ordered_ids   = [p['id'] for p in display_sorted]
+
+    groups = {p['id']: [] for p in patterns}
+    for e in comp_data:
+        if e.get('image_url'):
+            groups[assign_pattern(e, patterns)].append(e)
+    for k in groups:
+        groups[k].sort(key=lambda e: e.get('estimated_monthly_sales') or 0, reverse=True)
+
+    total     = sum(len(v) for v in groups.values())
+    n_patterns = len([p for p in patterns if p['id'] != 'P0'])
+
+    rows_html = ''
+    for pid in ordered_ids:
+        items = groups.get(pid, [])
+        meta  = pattern_map[pid]
+        color = meta.get('color', '#9ca3af')
+        count = len(items)
+
+        cards_html = ''
+        if not items:
+            cards_html = '<span class="dp-empty">No listings classified in this pattern.</span>'
+        else:
+            for e in items:
+                eid   = e.get('id', '')
+                url   = e.get('url', f'https://www.etsy.com/listing/{eid}/')
+                img   = e.get('image_url', '')
+                title = escape_html((e.get('title') or '')[:120])
+                reviews = e.get('reviews') or 0
+                price   = escape_html(e.get('price') or '')
+                ems     = e.get('estimated_monthly_sales')
+                ems_bg  = dp_ems_color(ems)
+                ems_label = f'EMS {ems}' if ems is not None else 'EMS —'
+                is_best   = e.get('is_bestseller', False)
+                best_badge = '<span class="dp-badge-best">&#9733; Best</span>' if is_best else ''
+                ems_badge  = f'<span class="dp-badge-ems" style="background:{ems_bg}">{ems_label}</span>'
+                cards_html += (
+                    f'<a class="dp-card" href="{url}" target="_blank">'
+                    f'<div class="dp-card-img"><img src="{img}" alt="" loading="lazy">'
+                    f'{ems_badge}{best_badge}</div>'
+                    f'<div class="dp-card-body">'
+                    f'<div class="dp-card-title">{title}</div>'
+                    f'<div class="dp-card-meta">{reviews:,} reviews &middot; {price}</div>'
+                    f'</div></a>'
+                )
+
+        rows_html += (
+            f'\n<div class="dp-row" style="--dp-color:{color}">'
+            f'\n  <div class="dp-row-header">'
+            f'<span class="dp-row-label">{escape_html(meta["label"])}</span>'
+            f'<span class="dp-row-count">{count} listings</span></div>'
+            f'\n  <p class="dp-row-desc">{escape_html(meta.get("description",""))}</p>'
+            f'\n  <div class="dp-scroll">{cards_html}</div>'
+            f'\n</div>'
+        )
+
+    return (
+        f'\n<div class="dp-section">'
+        f'\n<h2 class="mi-h2">Top Design Patterns</h2>'
+        f'\n<p class="dp-subtitle">{total} listings across {n_patterns} patterns'
+        f' &middot; listed in no particular order &middot; click any card to open on Etsy</p>'
+        f'{rows_html}'
+        f'\n</div>'
+    )
+
+
+def build_garment_blanks_section(comp_data):
+    """Compute Section 3: Garment Blanks — always derived from competitors.json."""
+    from collections import Counter
+    total = len(comp_data)
+
+    raw_counts = Counter(e.get('blank') for e in comp_data)
+    null_count = raw_counts.pop(None, 0)
+    identified = total - null_count
+
+    # Consolidate sub-variants for display but keep raw counts accurate
+    groups = {}  # display_name -> {sub: count}
+    for blank, cnt in raw_counts.items():
+        if 'Comfort Colors' in blank:
+            groups.setdefault('Comfort Colors', {})['— ' + blank] = cnt
+        elif 'Bella' in blank:
+            groups.setdefault('Bella Canvas', {})['— ' + blank] = cnt
+        elif 'Gildan' in blank:
+            groups.setdefault('Gildan', {})['— ' + blank] = cnt
+        else:
+            groups.setdefault(blank, {})[blank] = cnt
+
+    rows_html = ''
+    for group, subs in sorted(groups.items(), key=lambda x: -sum(x[1].values())):
+        group_total = sum(subs.values())
+        rows_html += f'<tr><td><strong>{escape_html(group)} (all variants)</strong></td><td style="text-align:right">{group_total}</td><td>Consolidated <span class="src-tag src-our-data" title="[our data]">[our data]</span></td></tr>'
+        for sub, cnt in sorted(subs.items(), key=lambda x: -x[1]):
+            label = sub if sub.startswith('—') else '— ' + sub
+            rows_html += f'<tr><td style="padding-left:24px">{escape_html(label)}</td><td style="text-align:right">{cnt}</td><td>blank field = <code class="mi-code">{escape_html(sub.lstrip("— "))}</code> <span class="src-tag src-our-data" title="[our data]">[our data]</span></td></tr>'
+
+    rows_html += (
+        f'<tr><td><strong>Not specified (null)</strong></td>'
+        f'<td style="text-align:right">{null_count}</td>'
+        f'<td>Blank could not be parsed from listing <span class="src-tag src-our-data" title="[our data]">[our data]</span></td></tr>'
+    )
+
+    cc_total = sum(v for k, v in raw_counts.items() if 'Comfort Colors' in k)
+    cc_pct = round(cc_total / total * 100, 1)
+
+    return (
+        '<h2 class="mi-h2">3. Garment Blanks Mentioned</h2>'
+        '<div class="mi-table-wrap"><table class="mi-table">'
+        '<thead><tr><th>Blank</th><th style="text-align:right">Count</th><th>Notes</th></tr></thead>'
+        '<tbody>' + rows_html + '</tbody>'
+        '</table></div>'
+        f'<p class="mi-p"><strong>Totals:</strong> {identified}/{total} listings have a blank identified; {null_count}/{total} have null. '
+        f'<span class="src-tag src-our-data" title="[our data]">[our data]</span></p>'
+        f'<p class="mi-p"><strong>Important caveat:</strong> The <code class="mi-code">blank</code> field is populated by title/description text parsing. '
+        f'<span class="src-tag src-our-data" title="[our data]">[our data]</span> '
+        f'Sellers sometimes name a blank in their listing title for SEO purposes even if the product ships on a different blank. '
+        f'<span class="src-tag src-market" title="[market knowledge]">[market knowledge]</span></p>'
+        f'<p class="mi-p"><strong>Comfort Colors dominance:</strong> {cc_total}/{total} listings ({cc_pct}%) reference Comfort Colors, including all three top-EMS listings. '
+        f'<span class="src-tag src-our-data" title="[our data]">[our data]</span> '
+        f'Comfort Colors garment-dyed blanks are broadly favored in POD apparel niches for their vintage aesthetic — this niche confirms that pattern. '
+        f'<span class="src-tag src-market" title="[market knowledge]">[market knowledge]</span></p>'
+        '<div class="mi-hr"></div>'
+    )
+
+
+def build_print_methods_section(comp_data):
+    """Compute Section 4: Print Methods — always derived from competitors.json."""
+    from collections import Counter
+    total = len(comp_data)
+
+    method_stats = {}  # method -> {total, confirmed, inferred}
+    for e in comp_data:
+        m = e.get('print_method') or 'unknown'
+        confirmed = bool(e.get('print_method_confirmed'))
+        if m not in method_stats:
+            method_stats[m] = {'total': 0, 'confirmed': 0, 'inferred': 0}
+        method_stats[m]['total'] += 1
+        if m == 'unknown':
+            method_stats[m]['inferred'] += 1
+        elif confirmed:
+            method_stats[m]['confirmed'] += 1
+        else:
+            method_stats[m]['inferred'] += 1
+
+    display_order = ['dtg', 'embroidery', 'screen_print', 'unknown']
+    display_names = {'dtg': 'DTG', 'embroidery': 'Embroidery', 'screen_print': 'Screen print', 'unknown': 'Unknown'}
+
+    rows_html = ''
+    grand_total = grand_confirmed = grand_inferred = 0
+    for m in display_order:
+        if m not in method_stats:
+            continue
+        s = method_stats[m]
+        name = display_names.get(m, m)
+        conf_str = 'n/a' if m == 'unknown' else str(s['confirmed'])
+        rows_html += (
+            f'<tr><td>{name}</td>'
+            f'<td style="text-align:right">{s["total"]}</td>'
+            f'<td style="text-align:right">{conf_str}</td>'
+            f'<td style="text-align:right">{s["inferred"]}</td></tr>'
+        )
+        grand_total += s['total']
+        grand_confirmed += s['confirmed']
+        grand_inferred += s['inferred']
+
+    rows_html += (
+        f'<tr><td><strong>Total</strong></td>'
+        f'<td style="text-align:right"><strong>{grand_total}</strong></td>'
+        f'<td style="text-align:right"><strong>{grand_confirmed}</strong></td>'
+        f'<td style="text-align:right"><strong>{grand_inferred}</strong></td></tr>'
+    )
+
+    dtg = method_stats.get('dtg', {})
+    emb = method_stats.get('embroidery', {})
+    unk = method_stats.get('unknown', {})
+
+    dtg_total = dtg.get('total', 0)
+    emb_total = emb.get('total', 0)
+    emb_confirmed = emb.get('confirmed', 0)
+    dtg_inferred = dtg.get('inferred', 0)
+    dtg_pct = round(dtg_total / total * 100, 1) if total else 0
+    emb_pct = round(emb_total / total * 100, 1) if total else 0
+    unk_total = unk.get('total', 0)
+
+    prose = (
+        f'All method counts are from competitors.json. <span class="src-tag src-our-data" title="[our data]">[our data]</span> '
+        f'{dtg_inferred} of the {dtg_total} DTG listings are inferred — the print method was not stated explicitly in the listing. '
+        f'<span class="src-tag src-our-data" title="[our data]">[our data]</span> '
+    )
+    if emb_confirmed == emb_total and emb_total > 0:
+        prose += (
+            f'Embroidery is always explicitly stated ({emb_confirmed}/{emb_total} confirmed). '
+            f'<span class="src-tag src-our-data" title="[our data]">[our data]</span> '
+        )
+    prose += (
+        f'Sellers typically call out embroidery as a premium selling point but treat DTG as a generic default not worth mentioning. '
+        f'<span class="src-tag src-market" title="[market knowledge]">[market knowledge]</span>'
+    )
+
+    # Unknown caveat if significant
+    unknown_note = ''
+    if unk_total >= 5:
+        unk_pct = round(unk_total / total * 100)
+        unknown_note = (
+            f'<p class="mi-p"><strong>Note:</strong> {unk_total} listings ({unk_pct}%) have an unresolved print method — '
+            f'these are typically listings where neither the title, description, nor tags made the method clear. '
+            f'Do not conflate "unknown" with DTG; treat them as unverified. '
+            f'<span class="src-tag src-our-data" title="[our data]">[our data]</span></p>'
+        )
+
+    dist_note = (
+        f'<p class="mi-p"><strong>Distribution:</strong> DTG is the dominant method ({dtg_pct}% of listings). '
+        f'Embroidery is present in {emb_total} listings ({emb_pct}%), concentrated in sweatshirts and portrait-from-photo products. '
+        f'<span class="src-tag src-our-data" title="[our data]">[our data]</span></p>'
+    )
+
+    return (
+        '<h2 class="mi-h2">4. Print Methods</h2>'
+        '<div class="mi-table-wrap"><table class="mi-table">'
+        '<thead><tr>'
+        '<th>Method</th>'
+        '<th style="text-align:right">Total</th>'
+        '<th style="text-align:right">Confirmed</th>'
+        '<th style="text-align:right">Inferred</th>'
+        '</tr></thead>'
+        '<tbody>' + rows_html + '</tbody>'
+        '</table></div>'
+        f'<p class="mi-p">{prose}</p>'
+        + dist_note
+        + unknown_note
+        + '<div class="mi-hr"></div>'
+    )
+
+
+def build_listing_pricing_strategy_section(comp_data):
+    """Build the combined Pricing & Listing Strategy section for Tab 1."""
+    from collections import Counter
+    import statistics
+
+    if not comp_data:
+        return ''
+
+    total = len(comp_data)
+
+    # ── Part 1: Intro paragraph ───────────────────────────────────────────────
+
+    intro_p = (
+        '<p class="mi-p">Pricing in the dog-mom niche is more complex than it appears. '
+        'Most high-volume sellers use <strong>anchor pricing</strong> — displaying an artificially '
+        'low variant (youth sizes, digital files, small accessories) in Etsy search results while '
+        'the shirt a buyer actually wants costs significantly more. '
+        'Understanding the gap between displayed prices and real prices is essential before you '
+        'set your own — you could inadvertently anchor against yourself or misprice relative '
+        'to the true competitive range.</p>'
+    )
+
+    # ── Part 2: Price band table (uses price_real_min) ────────────────────────
+
+    BANDS = [
+        ('Under $14',  None,  14.0),
+        ('$14–$20',    14.0,  20.0),
+        ('$20–$28',    20.0,  28.0),
+        ('$28+',       28.0,  None),
+    ]
+
+    def band_label(price):
+        for label, lo, hi in BANDS:
+            if (lo is None or price >= lo) and (hi is None or price < hi):
+                return label
+        return '$28+'
+
+    band_groups = {label: [] for label, _, _ in BANDS}
+    for e in comp_data:
+        real_min = e.get('price_real_min')
+        if real_min is not None:
+            lbl = band_label(real_min)
+            band_groups[lbl].append(e)
+
+    band_rows_html = ''
+    best_band_label = None
+    best_band_ems = -1
+    for label, lo, hi in BANDS:
+        items = band_groups[label]
+        count = len(items)
+        if count == 0:
+            continue
+        real_mins_all = [e.get('price_real_min') for e in comp_data if e.get('price_real_min') is not None]
+        denom = len(real_mins_all) if real_mins_all else 1
+        pct = round(count / denom * 100)
+        ems_vals = [e.get('estimated_monthly_sales') for e in items if e.get('estimated_monthly_sales') is not None]
+        avg_ems = round(statistics.mean(ems_vals)) if ems_vals else None
+        if avg_ems is not None and avg_ems > best_band_ems:
+            best_band_ems = avg_ems
+            best_band_label = label
+        best_e = max(items, key=lambda e: e.get('estimated_monthly_sales') or 0)
+        example_url = best_e.get('url', '')
+        avg_ems_str = str(avg_ems) if avg_ems is not None else '—'
+        link = f'<a href="{example_url}" target="_blank">View →</a>' if example_url else '—'
+        band_rows_html += (
+            f'<tr>'
+            f'<td><strong>{escape_html(label)}</strong></td>'
+            f'<td style="text-align:right">{count}</td>'
+            f'<td style="text-align:right">{pct}%</td>'
+            f'<td style="text-align:right">{avg_ems_str}</td>'
+            f'<td>{link}</td>'
+            f'</tr>'
+        )
+
+    band_table = (
+        '<div class="mi-table-wrap"><table class="mi-table">'
+        '<thead><tr>'
+        '<th>Price Band</th>'
+        '<th style="text-align:right">Sellers</th>'
+        '<th style="text-align:right">%</th>'
+        '<th style="text-align:right">Avg EMS</th>'
+        '<th>Best Example</th>'
+        '</tr></thead>'
+        '<tbody>' + band_rows_html + '</tbody>'
+        '</table></div>'
+    )
+
+    # Qualitative insight for price bands
+    premium_items = band_groups.get('$28+', [])
+    premium_ems_vals = [e.get('estimated_monthly_sales') for e in premium_items if e.get('estimated_monthly_sales') is not None]
+    premium_avg_ems = round(statistics.mean(premium_ems_vals)) if premium_ems_vals else None
+    premium_count = len(premium_items)
+
+    if best_band_label:
+        if best_band_label == '$28+':
+            band_insight = (
+                f'The <strong>{best_band_label}</strong> band has the highest average monthly sales (EMS {best_band_ems}), '
+                f'suggesting buyers in this niche will pay a premium for perceived quality or personalization.'
+            )
+        elif best_band_label in ('Under $14', '$14–$20'):
+            band_insight = (
+                f'The <strong>{best_band_label}</strong> band has the highest average monthly sales (EMS {best_band_ems}), '
+                f'suggesting buyers in this niche are price-sensitive — volume comes from accessible price points.'
+            )
+        else:
+            band_insight = (
+                f'The <strong>{best_band_label}</strong> band has the highest average monthly sales (EMS {best_band_ems}), '
+                f'suggesting the sweet spot is mid-range pricing — not cheap enough to signal low quality, '
+                f'not expensive enough to lose impulse buyers.'
+            )
+        if premium_avg_ems is not None:
+            band_insight += (
+                f' Only {premium_count} seller{"s" if premium_count != 1 else ""} operate above $28, '
+                f'averaging EMS {premium_avg_ems} — {"a viable premium tier exists" if premium_avg_ems > best_band_ems * 0.7 else "premium positioning is difficult in this niche"}.'
+            )
+    else:
+        band_insight = 'Insufficient price_real_min data to draw conclusions about price bands.'
+
+    band_insight_p = f'<p class="mi-p">{band_insight}</p>'
+
+    price_band_section = (
+        f'<h3 class="mi-h3">What does a shirt actually cost here?</h3>'
+        f'{band_table}'
+        f'{band_insight_p}'
+    )
+
+    # ── Part 3: How search prices are manipulated ─────────────────────────────
+
+    price_mins = [e.get('price_min') for e in comp_data if e.get('price_min') is not None]
+    real_mins  = [e.get('price_real_min') for e in comp_data if e.get('price_real_min') is not None]
+
+    if price_mins and real_mins:
+        median_display = sorted(price_mins)[len(price_mins) // 2]
+        median_real    = sorted(real_mins)[len(real_mins) // 2]
+        gap_pct = round((median_real - median_display) / median_display * 100) if median_display else 0
+        illusion_warn = (
+            f'<div class="mi-warn">'
+            f'Median price shown in Etsy search: <strong>${median_display:.2f}</strong> '
+            f'&rarr; Median price buyers actually pay: <strong>${median_real:.2f}</strong> '
+            f'&mdash; a gap of {gap_pct}% created by anchor variants that most buyers never purchase.'
+            f'</div>'
+        )
+    else:
+        illusion_warn = ''
+
+    # Anchor strategy table
+    ANCHOR_LABELS = {
+        'youth':            'Youth / kids size anchor',
+        'honest':           'Honest pricing',
+        'size_anchor_low':  'Size anchor — potential (20–49% gap)',
+        'size_anchor_high': 'Size anchor — confirmed (50%+ gap)',
+        'digital_file':     'Digital file anchor',
+        'bandana':          'Bandana / small item anchor',
+        'embroidery_file':  'Embroidery file anchor',
+        'quantity_pricing': 'Quantity / bulk pricing',
+    }
+
+    known_anchor_keys = set(ANCHOR_LABELS.keys()) - {'honest', 'quantity_pricing'}
+    extra_types = set()
+    for e in comp_data:
+        at = e.get('anchor_type')
+        if at and at not in known_anchor_keys:
+            extra_types.add(at)
+
+    def group_key(e):
+        at = e.get('anchor_type')
+        qp = e.get('quantity_pricing', False)
+        if qp:
+            return 'quantity_pricing'
+        if at is None:
+            return 'honest'
+        return at
+
+    anchor_groups = {}
+    for e in comp_data:
+        k = group_key(e)
+        anchor_groups.setdefault(k, []).append(e)
+
+    ordered_keys = list(ANCHOR_LABELS.keys()) + sorted(extra_types)
+    anchor_rows_data = []
+    for key in ordered_keys:
+        items = anchor_groups.get(key, [])
+        if not items:
+            continue
+        label = ANCHOR_LABELS.get(key, key.replace('_', ' ').title())
+        count = len(items)
+        pct = round(count / total * 100)
+        ems_vals = [e.get('estimated_monthly_sales') for e in items if e.get('estimated_monthly_sales') is not None]
+        avg_ems = round(statistics.mean(ems_vals)) if ems_vals else None
+        best_e = max(items, key=lambda e: e.get('estimated_monthly_sales') or 0)
+        example_url = best_e.get('url', '')
+        anchor_rows_data.append((label, count, pct, avg_ems, example_url, key))
+
+    anchor_rows_data.sort(key=lambda r: r[1], reverse=True)
+
+    anchor_rows_html = ''
+    for label, count, pct, avg_ems, example_url, key in anchor_rows_data:
+        avg_ems_str = str(avg_ems) if avg_ems is not None else '—'
+        link = f'<a href="{example_url}" target="_blank">View →</a>' if example_url else '—'
+        anchor_rows_html += (
+            f'<tr>'
+            f'<td>{escape_html(label)}</td>'
+            f'<td style="text-align:right">{count}</td>'
+            f'<td style="text-align:right">{pct}%</td>'
+            f'<td style="text-align:right">{avg_ems_str}</td>'
+            f'<td>{link}</td>'
+            f'</tr>'
+        )
+
+    anchor_table = (
+        '<div class="mi-table-wrap"><table class="mi-table">'
+        '<thead><tr>'
+        '<th>Strategy</th>'
+        '<th style="text-align:right">Count</th>'
+        '<th style="text-align:right">% of listings</th>'
+        '<th style="text-align:right">Avg EMS</th>'
+        '<th>Example</th>'
+        '</tr></thead>'
+        '<tbody>' + anchor_rows_html + '</tbody>'
+        '</table></div>'
+    )
+
+    # Qualitative anchor insight
+    honest_items = anchor_groups.get('honest', [])
+    honest_ems_vals = [e.get('estimated_monthly_sales') for e in honest_items if e.get('estimated_monthly_sales') is not None]
+    honest_avg_ems = round(statistics.mean(honest_ems_vals)) if honest_ems_vals else None
+
+    # Find dominant anchor type (excluding honest)
+    dominant = next((r for r in anchor_rows_data if r[5] != 'honest'), None)
+    if dominant:
+        dom_label, dom_count, dom_pct, dom_ems, _, dom_key = dominant
+        if honest_avg_ems is not None and dom_ems is not None:
+            ratio = dom_ems / honest_avg_ems if honest_avg_ems > 0 else 1
+            if ratio >= 1.15:
+                ems_comparison = f'is {round((ratio-1)*100)}% higher than honest listings (avg EMS {honest_avg_ems}). This suggests the lower displayed price drives meaningful click-through advantages'
+            elif ratio <= 0.87:
+                ems_comparison = f'is {round((1-ratio)*100)}% lower than honest listings (avg EMS {honest_avg_ems}). The data suggests anchoring does not guarantee higher volume — design and reviews matter more'
+            else:
+                ems_comparison = f'is similar to honest listings (avg EMS {honest_avg_ems}). The data does not show a clear EMS advantage from anchoring — quality and design matter more than the search price'
+            anchor_insight = (
+                f'{escape_html(dom_label)} {"is" if dom_count == 1 else "are"} the dominant strategy '
+                f'({dom_pct}% of listings), and their avg EMS of {dom_ems} {ems_comparison}.'
+            )
+        elif dom_ems is not None:
+            anchor_insight = (
+                f'{escape_html(dom_label)} {"is" if dom_count == 1 else "are"} the dominant strategy '
+                f'({dom_pct}% of listings) with avg EMS {dom_ems}.'
+            )
+        else:
+            anchor_insight = (
+                f'{escape_html(dom_label)} {"is" if dom_count == 1 else "are"} the dominant strategy '
+                f'({dom_pct}% of listings).'
+            )
+    else:
+        anchor_insight = 'Most sellers in this niche use honest pricing with no anchor variants.'
+
+    anchor_insight_p = f'<p class="mi-p">{anchor_insight}</p>'
+
+    manipulation_section = (
+        f'<h3 class="mi-h3">How search prices are manipulated</h3>'
+        f'{illusion_warn}'
+        f'{anchor_table}'
+        f'{anchor_insight_p}'
+    )
+
+    # ── Part 5: Multi-Product Listing Strategy (preserved existing logic) ─────
+
+    has_product_types = any(e.get('product_types') for e in comp_data)
+    if not has_product_types:
+        multi_product_section = ''
+    else:
+        multi  = [e for e in comp_data if e.get('multi_product_listing')]
+        single = [e for e in comp_data if not e.get('multi_product_listing')]
+
+        if len(multi) == 0:
+            multi_product_section = ''
+        else:
+            multi_pct  = round(len(multi) / total * 100) if total else 0
+            single_pct = 100 - multi_pct
+
+            combos = Counter()
+            for e in multi:
+                pt = e.get('product_types')
+                if pt and isinstance(pt, list) and len(pt) > 0:
+                    combo = ' + '.join(sorted(pt))
+                    combos[combo] += 1
+
+            single_types = Counter()
+            for e in single:
+                pt = e.get('product_types')
+                if pt and isinstance(pt, list):
+                    for t in pt:
+                        single_types[t] += 1
+
+            stats_html = (
+                f'<div class="ls-stats">'
+                f'<div class="ls-stat-box">'
+                f'<div class="ls-stat-num">{multi_pct}%</div>'
+                f'<div class="ls-stat-label">use multi-product listings</div>'
+                f'<div class="ls-stat-sub">{len(multi)} of {total} listings</div>'
+                f'</div>'
+                f'<div class="ls-stat-box">'
+                f'<div class="ls-stat-num">{single_pct}%</div>'
+                f'<div class="ls-stat-label">single product only</div>'
+                f'<div class="ls-stat-sub">{len(single)} of {total} listings</div>'
+                f'</div>'
+                f'</div>'
+            )
+
+            combo_rows = ''
+            for combo, count in combos.most_common():
+                pct_of_multi = round(count / len(multi) * 100) if multi else 0
+                combo_rows += (
+                    f'<tr><td>{escape_html(combo)}</td>'
+                    f'<td style="text-align:right">{count}</td>'
+                    f'<td style="text-align:right">{pct_of_multi}%</td></tr>'
+                )
+
+            combo_table = (
+                '<div class="mi-table-wrap"><table class="mi-table">'
+                '<tr><th>Combo</th><th style="text-align:right">Count</th>'
+                '<th style="text-align:right">% of multi-product</th></tr>'
+                + combo_rows +
+                '</table></div>'
+            )
+
+            top4_combos = [combo for combo, _ in combos.most_common(4)]
+            combo_to_listing = {}
+            for combo_key in top4_combos:
+                parts_set = set(combo_key.split(' + '))
+                candidates = []
+                for e in multi:
+                    pt = e.get('product_types')
+                    if pt and isinstance(pt, list) and set(pt) == parts_set:
+                        candidates.append(e)
+                if candidates:
+                    best = max(candidates, key=lambda e: e.get('estimated_monthly_sales') or 0)
+                    combo_to_listing[combo_key] = best
+
+            example_cells = ''
+            for combo_key in top4_combos:
+                ex = combo_to_listing.get(combo_key)
+                if not ex:
+                    continue
+                url   = ex.get('url', '')
+                img   = ex.get('image_url', '')
+                title = escape_html((ex.get('title') or '')[:80])
+                price = escape_html(ex.get('price') or '')
+                ems   = ex.get('estimated_monthly_sales')
+                ems_label   = f'~{ems}/mo' if ems else 'EMS —'
+                combo_label = escape_html(combo_key)
+                example_cells += (
+                    f'<div style="display:flex;flex-direction:column;gap:6px;">'
+                    f'<div style="font-size:11px;font-weight:700;text-transform:uppercase;'
+                    f'letter-spacing:0.5px;color:var(--text-muted);">{combo_label}</div>'
+                    f'<a class="mi-top-card" href="{url}" target="_blank">'
+                    f'<img class="mi-top-card-img" src="{img}" alt="" loading="lazy">'
+                    f'<div class="mi-top-card-body">'
+                    f'<div class="mi-top-card-title">{title}</div>'
+                    f'<div class="mi-top-card-meta">{ems_label} &middot; {price}</div>'
+                    f'</div></a>'
+                    f'</div>'
+                )
+
+            if example_cells:
+                examples_section = (
+                    '<h3 class="mi-h3">Example listings per combo</h3>'
+                    '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:12px 0 24px;">'
+                    + example_cells +
+                    '</div>'
+                )
+            else:
+                examples_section = ''
+
+            if single_types:
+                top_singles = ', '.join(f'{t} ({c})' for t, c in single_types.most_common(5))
+                single_note = f'<p class="dp-subtitle">Top single-product types: {escape_html(top_singles)}</p>'
+            else:
+                single_note = ''
+
+            seo_warn = (
+                '<div class="mi-warn"><strong>SEO note:</strong> Etsy\'s algorithm de-ranks listings that compete '
+                'against themselves. Multi-product listings consolidate reviews but each garment type loses its own '
+                'search slot. Separate listings per garment type rank higher individually.</div>'
+            )
+
+            multi_product_section = (
+                f'<h3 class="mi-h3">Multi-Product Listing Strategy</h3>'
+                f'<p class="dp-subtitle">How competitors structure their listings — single garment vs multi-product bundles</p>'
+                f'{stats_html}'
+                f'{combo_table}'
+                f'{examples_section}'
+                f'{single_note}'
+                f'{seo_warn}'
+            )
+
+    return (
+        f'\n<div class="dp-section">'
+        f'\n<h2 class="mi-h2">Pricing &amp; Listing Strategy</h2>'
+        f'{intro_p}'
+        f'{price_band_section}'
+        f'<div class="mi-hr"></div>'
+        f'{manipulation_section}'
+        f'<div class="mi-hr"></div>'
+        f'{multi_product_section}'
+        f'\n</div>'
+    )
 
 
 # ── Markdown → HTML (for market-insights.md) ──────────────────────────────────
@@ -70,19 +931,24 @@ def md_to_html(md_text, lookup=None):
     i = 0
     page_title = 'Market Insights'
     meta_lines = []
+    warn_pre = []
 
     if lines and lines[0].startswith('# '):
         page_title = lines[0][2:].strip()
         i = 1
         while i < len(lines) and lines[i].strip() != '---':
             s = lines[i].strip()
-            if s:
+            if s.startswith('>'):
+                warn_pre.append(s[2:] if s.startswith('> ') else s[1:].strip())
+            elif s:
                 meta_lines.append(s)
             i += 1
 
     if meta_lines:
         meta_html = ' &nbsp;·&nbsp; '.join(inline(m, lookup) for m in meta_lines)
         parts.append('<div class="mi-meta">' + meta_html + '</div>')
+    if warn_pre:
+        parts.append('<div class="mi-warn">' + '<br>'.join(inline(l, lookup) for l in warn_pre if l) + '</div>')
 
     while i < len(lines):
         line = lines[i]
@@ -124,6 +990,16 @@ def md_to_html(md_text, lookup=None):
                          ''.join('<li>' + inline(x, lookup) + '</li>' for x in items) +
                          '</ol>')
 
+        elif line.startswith('>'):
+            warn_lines = []
+            while i < len(lines) and lines[i].startswith('>'):
+                stripped = lines[i][2:] if lines[i].startswith('> ') else lines[i][1:].strip()
+                if stripped:
+                    warn_lines.append(stripped)
+                i += 1
+            if warn_lines:
+                parts.append('<div class="mi-warn">' + '<br>'.join(inline(l, lookup) for l in warn_lines) + '</div>')
+
         elif line.strip() == '':
             i += 1
 
@@ -136,24 +1012,30 @@ def md_to_html(md_text, lookup=None):
 
 # ── HTML builder ───────────────────────────────────────────────────────────────
 
-def build_top_strip(comp_data):
-    """Horizontal scrollable strip of top shirts by review count."""
+def build_top_strip(comp_data, ems_reliable=True):
+    """Horizontal scrollable strip of top listings."""
+    sort_key = (lambda e: e.get('estimated_monthly_sales') or 0) if ems_reliable else (lambda e: e.get('reviews') or 0)
     top = sorted(
         [e for e in comp_data if e.get('image_url')],
-        key=lambda e: e.get('reviews', 0), reverse=True
+        key=sort_key, reverse=True
     )[:8]
     if not top:
         return ''
     cards = ''
     for item in top:
-        reviews = f'{item["reviews"]:,} reviews' if item.get('reviews') else 'No reviews'
+        if ems_reliable and item.get('estimated_monthly_sales'):
+            meta_left = f'~{item["estimated_monthly_sales"]}/mo est.'
+        elif item.get('reviews'):
+            meta_left = f'{item["reviews"]:,} reviews'
+        else:
+            meta_left = 'No reviews'
         title = item['title'][:55] + ('…' if len(item['title']) > 55 else '')
         cards += (
             '<a class="mi-top-card" href="' + item['url'] + '" target="_blank">'
             + '<img class="mi-top-card-img" src="' + item['image_url'] + '" alt="" loading="lazy">'
             + '<div class="mi-top-card-body">'
             + '<div class="mi-top-card-title">' + title + '</div>'
-            + '<div class="mi-top-card-meta">' + reviews + ' &middot; ' + item.get('price', '') + '</div>'
+            + '<div class="mi-top-card-meta">' + meta_left + ' &middot; ' + item.get('price', '') + '</div>'
             + '</div></a>'
         )
     return (
@@ -164,19 +1046,147 @@ def build_top_strip(comp_data):
     )
 
 
-def build_html(niche, comp_data, insights_md, date_str):
+def build_shop_intel_tab(watchlist):
+    """Build the Shop Intelligence tab HTML from shop-watchlist.json data."""
+    if not watchlist:
+        return (
+            '\n<div id="tab-shops" class="tab-panel">'
+            '\n  <div class="si-outer"><p class="si-empty">No shop-watchlist.json found. '
+            'Run: <code>python3 scripts/research-shops.py --niche &lt;niche&gt;</code></p></div>'
+            '\n</div>'
+        )
+
+    shops = [s for s in watchlist if 'error' not in s]
+    shops.sort(key=lambda s: s.get('estimated_monthly_sales') or 0, reverse=True)
+
+    trend_icon = {'growing': '↑', 'declining': '↓', 'stable': '→', 'unknown': '–'}
+    trend_color = {'growing': 'si-trend-up', 'declining': 'si-trend-down', 'stable': 'si-trend-stable', 'unknown': 'si-trend-unknown'}
+    conf_color = {'high': 'si-conf-high', 'medium': 'si-conf-med', 'low': 'si-conf-low'}
+
+    rows = ''
+    for s in shops:
+        name = s.get('shop_name', '—')
+        url = s.get('etsy_url', '#')
+        headline = s.get('estimated_monthly_sales') or '—'
+        m1 = s.get('method1_lifetime_avg_monthly') or '—'
+        m2 = s.get('method2_current_momentum') or '—'
+        m3 = s.get('method3_listing_rollup') or '—'
+        m2_window = s.get('method2_window') or ''
+        trend = s.get('trend_signal') or 'unknown'
+        conf = s.get('confidence') or 'low'
+        total_sales = s.get('total_sales')
+        total_str = f'{total_sales:,}' if total_sales else '—'
+        months = s.get('months_active') or '—'
+        notes = s.get('confidence_notes') or []
+        notes_html = ('<div class="si-notes">' + ' &middot; '.join(notes[:2]) + '</div>') if notes else ''
+
+        trend_cls = trend_color.get(trend, 'si-trend-unknown')
+        conf_cls = conf_color.get(conf, 'si-conf-low')
+
+        rows += f'''<tr>
+  <td class="si-shop-cell"><a href="{url}" target="_blank" class="si-shop-link">{name} &#8599;</a>{notes_html}</td>
+  <td class="si-num si-headline">{headline}</td>
+  <td class="si-num">{m1}</td>
+  <td class="si-num"><span title="{m2_window}">{m2}</span><div class="si-window">{m2_window}</div></td>
+  <td class="si-num">{m3}</td>
+  <td><span class="si-trend {trend_cls}">{trend_icon.get(trend,"–")} {trend.capitalize()}</span></td>
+  <td><span class="si-conf {conf_cls}">{conf.capitalize()}</span></td>
+  <td class="si-num si-muted">{total_str}</td>
+  <td class="si-num si-muted">{months}</td>
+</tr>'''
+
+    return (
+        '\n<div id="tab-shops" class="tab-panel">'
+        '\n<div class="si-outer">'
+        '\n<div class="si-header">'
+        '\n  <h1>Shop Intelligence</h1>'
+        '\n  <p class="si-subtitle">Three-signal monthly sales estimate per competitor shop. '
+        'M2 uses a 5-month review window (up to 20 pages) to smooth seasonal spikes.</p>'
+        '\n</div>'
+        '\n<div class="si-table-wrap"><table class="si-table">'
+        '\n<thead><tr>'
+        '<th>Shop</th>'
+        '<th title="Headline estimate — M2 if available, else M1">Est/mo</th>'
+        '<th title="Method 1: total_sales ÷ months active (lifetime average)">M1 Lifetime</th>'
+        '<th title="Method 2: review rate over 5-month window × 30 × 7 (current pace)">M2 Current</th>'
+        '<th title="Method 3: sum of listing-level estimates from competitors.json">M3 Rollup</th>'
+        '<th>Trend</th>'
+        '<th title="Signal divergence: High <40%, Medium 40-70%, Low >70%">Confidence</th>'
+        '<th title="Total lifetime sales shown on Etsy shop page">Total Sales</th>'
+        '<th>Months Active</th>'
+        '</tr></thead>'
+        '\n<tbody>' + rows + '</tbody>'
+        '\n</table></div>'
+        '\n<div class="si-legend">'
+        '<strong>M1</strong> total_sales ÷ months active (lifetime avg) &nbsp;·&nbsp; '
+        '<strong>M2</strong> review rate × 30 × 7 over 5-month window (current pace) &nbsp;·&nbsp; '
+        '<strong>M3</strong> sum of listing estimates from competitors.json &nbsp;·&nbsp; '
+        '<strong>Trend</strong> = M2 ÷ M1 — ↑ Growing ≥1.3 &nbsp;·&nbsp; → Stable 0.6–1.3 &nbsp;·&nbsp; ↓ Declining ≤0.6 &nbsp;·&nbsp; '
+        '<strong>Confidence</strong> = signal divergence: High &lt;40%, Medium 40–70%, Low &gt;70%'
+        '</div>'
+        '\n</div>'
+        '\n</div>'
+    )
+
+
+
+def build_html(niche, comp_data, insights_md, watchlist, date_str, ems_reliable=True, patterns_config=None):
+    # Deduplicate by listing ID
+    seen_ids: set = set()
+    deduped = []
+    for e in comp_data:
+        eid = e.get('id')
+        if eid not in seen_ids:
+            seen_ids.add(eid)
+            deduped.append(e)
+    comp_data = deduped
+
+    # Nullify EMS/RPM when no date anchor exists
+    if not ems_reliable:
+        comp_data = [{**e, 'estimated_monthly_sales': None, 'reviews_per_month': None} for e in comp_data]
+
     niche_title = niche_to_title(niche)
     shirt_count = sum(1 for e in comp_data if e.get('is_shirt'))
     total = len(comp_data)
     data_json = json.dumps(comp_data, separators=(',', ':'))
     lookup = {e['id']: e for e in comp_data if e.get('id')}
-    top_strip = build_top_strip(comp_data)
+    top_strip = build_top_strip(comp_data, ems_reliable)
+    shop_intel_tab = build_shop_intel_tab(watchlist)
 
     if insights_md:
         insights_title, insights_body = md_to_html(insights_md, lookup)
     else:
         insights_title = 'Market Insights'
         insights_body = '<p class="mi-p" style="color:var(--text-muted)">No market-insights.md found for this project.</p>'
+
+    # Inject design patterns + listing strategy visuals after the Niche Verdict section (before next h2)
+    ls_section = build_listing_pricing_strategy_section(comp_data)
+
+    if patterns_config:
+        dp_section = build_design_patterns_section(comp_data, patterns_config)
+    else:
+        dp_section = ''
+
+    # Replace computed-section placeholders in rendered markdown
+    insights_body = insights_body.replace(
+        '<p class="mi-p">{{COMPUTED_BLANKS}}</p>',
+        build_garment_blanks_section(comp_data)
+    )
+    insights_body = insights_body.replace(
+        '<p class="mi-p">{{COMPUTED_PRINT_METHODS}}</p>',
+        build_print_methods_section(comp_data)
+    )
+
+    combined = dp_section + ls_section
+
+    if combined:
+        h2 = '<h2 class="mi-h2">'
+        parts = insights_body.split(h2, 2)
+        if len(parts) == 3:
+            # parts[1] = Niche Verdict heading + content, parts[2] = rest
+            insights_body = parts[0] + h2 + parts[1] + combined + h2 + parts[2]
+        else:
+            insights_body = combined + insights_body
 
     head = f"""<!DOCTYPE html>
 <html lang="en">
@@ -481,6 +1491,19 @@ def build_html(niche, comp_data, insights_md, date_str):
     border-radius: 4px; backdrop-filter: blur(4px);
   }}
   .reviews-badge .star {{ color: #FCD34D; }}
+  .est-sales-badge {{
+    display: inline-flex; align-items: center;
+    background: var(--blue-light); color: #1E40AF; border: 1px solid #BFDBFE;
+    font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 4px;
+    white-space: nowrap;
+  }}
+  .fav-badge {{
+    display: inline-flex; align-items: center; gap: 3px;
+    background: var(--green-light); color: #0D5C2E; border: 1px solid #A8D8BB;
+    font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 4px;
+    white-space: nowrap;
+  }}
+  .signals-row {{ display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }}
   .demand-signal {{
     display: inline-flex; align-items: center; gap: 4px;
     background: #FFF7ED; color: #C2410C; border: 1px solid #FED7AA;
@@ -497,12 +1520,10 @@ def build_html(niche, comp_data, insights_md, date_str):
   .reviews-text strong {{ color: var(--text-secondary); }}
   .tags {{ display: flex; flex-wrap: wrap; gap: 4px; }}
   .tag {{ font-size: 11px; font-weight: 500; padding: 2px 7px; border-radius: 4px; line-height: 1.6; }}
-  .tag-shirt       {{ background: var(--green-light);  color: #0D5C2E; }}
-  .tag-type        {{ background: var(--bg);           color: var(--text-secondary); border: 1px solid var(--border); }}
-  .tag-dtg         {{ background: var(--blue-light);   color: #1E40AF; }}
-  .tag-htv         {{ background: #FCE7F3;             color: #9D174D; }}
-  .tag-embroidery  {{ background: var(--purple-light); color: #4C1D95; }}
-  .tag-sublimation {{ background: var(--amber-light);  color: #92400E; }}
+  .tag-shirt    {{ background: var(--green-light); color: #0D5C2E; border: 1px solid #A8D8BB; }}
+  .tag-type     {{ background: var(--green-light); color: #0D5C2E; border: 1px solid #A8D8BB; }}
+  .tag-inferred {{ background: var(--blue-light);  color: #1E40AF; border: 1px solid #BFDBFE; }}
+  .tag-mockup   {{ background: #F3F4F6; color: #6B7280; border: 1px solid #D1D5DB; }}
   .design-style {{ font-size: 12px; color: var(--text-secondary); line-height: 1.5; }}
   .key-phrases {{ display: flex; flex-wrap: wrap; gap: 4px; }}
   .phrase {{
@@ -510,6 +1531,8 @@ def build_html(niche, comp_data, insights_md, date_str):
     border: 1px solid var(--border); padding: 2px 7px; border-radius: 4px;
   }}
   .shop-row {{ font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 5px; margin-top: auto; }}
+  .shop-link {{ color: inherit; text-decoration: none; }}
+  .shop-link:hover {{ color: var(--coral); text-decoration: underline; text-underline-offset: 2px; }}
   .card-footer {{ padding: 10px 14px 14px; }}
   .open-btn {{
     display: block; width: 100%; text-align: center; padding: 7px 12px;
@@ -523,6 +1546,104 @@ def build_html(niche, comp_data, insights_md, date_str):
     font-size: 11px; color: var(--text-muted); line-height: 1.45;
     border-top: 1px solid var(--border); padding: 8px 16px 0; margin: 0 0 10px;
   }}
+  .mi-warn {{
+    background: #FEF3C7; border: 1px solid #FCD34D; border-left: 3px solid #F59E0B;
+    border-radius: 8px; padding: 10px 14px; margin: 12px 0;
+    color: #92400E; font-size: 13px; line-height: 1.65;
+  }}
+  .mi-warn strong {{ color: #78350F; }}
+
+  /* ══ SHOP INTELLIGENCE TAB ══ */
+  .si-outer {{ max-width: 1100px; margin: 0 auto; padding: 36px 32px 72px; }}
+  .si-header {{ margin-bottom: 24px; padding-bottom: 18px; border-bottom: 2px solid var(--coral-light); }}
+  .si-header h1 {{ font-size: 22px; font-weight: 700; letter-spacing: -0.4px; }}
+  .si-subtitle {{ font-size: 13px; color: var(--text-secondary); margin-top: 6px; line-height: 1.5; }}
+  .si-empty {{ color: var(--text-muted); font-size: 14px; padding: 40px 0; }}
+  .si-table-wrap {{ overflow-x: auto; border-radius: 10px; border: 1px solid var(--border); }}
+  .si-table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
+  .si-table thead tr {{ background: var(--bg); }}
+  .si-table th {{
+    padding: 10px 14px; text-align: left; font-weight: 600; font-size: 12px;
+    color: var(--text-secondary); border-bottom: 1px solid var(--border);
+    white-space: nowrap; cursor: default;
+  }}
+  .si-table th[title] {{ text-decoration: underline dotted; text-underline-offset: 3px; }}
+  .si-table td {{ padding: 12px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }}
+  .si-table tbody tr:last-child td {{ border-bottom: none; }}
+  .si-table tbody tr:hover {{ background: #FAFAF8; }}
+  .si-shop-cell {{ min-width: 180px; }}
+  .si-shop-link {{
+    font-weight: 600; color: var(--text-primary); text-decoration: none; font-size: 13px;
+  }}
+  .si-shop-link:hover {{ color: var(--coral); }}
+  .si-notes {{ font-size: 11px; color: var(--text-muted); margin-top: 3px; line-height: 1.4; }}
+  .si-window {{ font-size: 10px; color: var(--text-muted); margin-top: 2px; }}
+  .si-num {{ text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }}
+  .si-headline {{ font-size: 15px; font-weight: 700; color: var(--text-primary); }}
+  .si-muted {{ color: var(--text-muted); }}
+  .si-trend {{
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 999px;
+    white-space: nowrap;
+  }}
+  .si-trend-up      {{ background: var(--green-light);  color: #0D5C2E; border: 1px solid #A8D8BB; }}
+  .si-trend-down    {{ background: #FEE2E2;              color: #B91C1C; border: 1px solid #FCA5A5; }}
+  .si-trend-stable  {{ background: var(--blue-light);   color: #1E40AF; border: 1px solid #BFDBFE; }}
+  .si-trend-unknown {{ background: #F3F4F6;              color: #6B7280; border: 1px solid #D1D5DB; }}
+  .si-conf {{
+    display: inline-block; font-size: 11px; font-weight: 700;
+    padding: 2px 8px; border-radius: 4px; white-space: nowrap;
+  }}
+  .si-conf-high {{ background: var(--green-light); color: #0D5C2E; }}
+  .si-conf-med  {{ background: var(--amber-light);  color: var(--amber); }}
+  .si-conf-low  {{ background: #FEE2E2;              color: #B91C1C; }}
+  .si-legend {{
+    margin-top: 14px; font-size: 12px; color: var(--text-muted); line-height: 1.7;
+  }}
+
+  /* ══ DESIGN PATTERNS (Tab 1 section) ══ */
+  .dp-section {{ margin-bottom: 8px; }}
+  .dp-subtitle {{ font-size: 12px; color: var(--text-muted); margin: 4px 0 20px; }}
+  .dp-row {{ margin-bottom: 32px; }}
+  .dp-row-header {{ display: flex; align-items: baseline; gap: 10px;
+                    border-left: 3px solid var(--dp-color); padding-left: 10px; }}
+  .dp-row-label {{ font-size: 15px; font-weight: 700; }}
+  .dp-row-count {{ font-size: 12px; color: var(--text-muted); }}
+  .dp-row-desc {{ font-size: 12px; color: var(--text-secondary); margin-top: 4px; padding-left: 13px; }}
+  .dp-scroll {{ display: flex; overflow-x: auto; gap: 12px; padding: 10px 0 14px;
+                scrollbar-width: thin; scrollbar-color: var(--border-dark) transparent; }}
+  .dp-scroll::-webkit-scrollbar {{ height: 5px; }}
+  .dp-scroll::-webkit-scrollbar-thumb {{ background: var(--border-dark); border-radius: 99px; }}
+  .dp-empty {{ font-size: 12px; color: var(--text-muted); padding: 20px 0; }}
+  .dp-card {{ width: 230px; flex-shrink: 0; border-radius: 10px; overflow: hidden;
+              background: var(--surface); border: 1px solid var(--border);
+              text-decoration: none; color: inherit; display: block;
+              transition: transform 0.15s ease, box-shadow 0.15s ease; }}
+  .dp-card:hover {{ transform: translateY(-3px); box-shadow: 0 8px 20px rgba(0,0,0,0.12); }}
+  .dp-card-img {{ position: relative; width: 100%; height: 220px; background: #f3f4f6; }}
+  .dp-card-img img {{ width: 100%; height: 220px; object-fit: cover; display: block; }}
+  .dp-badge-ems {{ position: absolute; top: 4px; right: 4px; font-size: 10px; font-weight: 700;
+                   padding: 2px 7px; border-radius: 4px; color: #fff; }}
+  .dp-badge-best {{ position: absolute; top: 4px; left: 4px; font-size: 9px;
+                    background: #f59e0b; color: #fff; padding: 2px 6px; border-radius: 3px; font-weight: 700; }}
+  .dp-card-body {{ padding: 8px 10px 10px; }}
+  .dp-card-title {{ font-size: 12px; font-weight: 600; color: var(--text-primary);
+                    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+                    overflow: hidden; line-height: 1.45; margin-bottom: 4px; }}
+  .dp-card-meta {{ font-size: 10px; color: var(--text-secondary); }}
+
+  /* ══ LISTING STRATEGY (Tab 1 section) ══ */
+  .ls-stats {{ display: flex; gap: 20px; margin: 16px 0; flex-wrap: wrap; }}
+  .ls-stat-box {{
+    flex: 1; min-width: 160px; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px 20px; text-align: center;
+  }}
+  .ls-stat-num {{ font-size: 32px; font-weight: 700; color: var(--coral); line-height: 1; }}
+  .ls-stat-label {{ font-size: 12px; color: var(--text-muted); margin-top: 6px; }}
+  .ls-stat-sub {{ font-size: 11px; color: var(--text-muted); margin-top: 2px; }}
+
+
 </style>
 </head>
 <body>"""
@@ -540,6 +1661,7 @@ def build_html(niche, comp_data, insights_md, date_str):
 <div class="tab-nav">
   <button class="tab-btn active" onclick="switchTab('insights',this)">📊 Market Insights</button>
   <button class="tab-btn" onclick="switchTab('competitors',this)">🔍 Competitor Report</button>
+  <button class="tab-btn" onclick="switchTab('shops',this)">🏪 Shop Intelligence</button>
 </div>"""
 
     insights_tab = (
@@ -591,7 +1713,8 @@ def build_html(niche, comp_data, insights_md, date_str):
   <button class="filter-btn" onclick="setFilter('novelty',this)">&#127873; Novelty <span id="cnt-novelty"></span></button>
   <span class="visible-count" id="visible-count"></span>
   <select class="sort-select" onchange="setSort(this.value)">
-    <option value="reviews">Sort: Most Reviews</option>
+    <option value="est-sales">{"Sort: Est. Monthly Sales" if ems_reliable else "Sort: Est. Sales (N/A — connect Etsy API)"}</option>
+    <option value="reviews"{"" if ems_reliable else ' selected'}>Most Reviews</option>
     <option value="price-asc">Price: Low &rarr; High</option>
     <option value="price-desc">Price: High &rarr; Low</option>
     <option value="rating">Highest Rated</option>
@@ -616,7 +1739,7 @@ function toggleLabels(btn) {
 }
 
 const DATA = """ + data_json + """;
-let filter = 'shirts', sort = 'reviews';
+let filter = 'shirts', sort = '""" + ('est-sales' if ems_reliable else 'reviews') + """';
 
 function getCategory(e) {
   const pt = (e.product_type||'').toLowerCase();
@@ -651,13 +1774,12 @@ function getBg(item) {
   return 'bg-other';
 }
 
-function printTag(m) {
+function printTag(m, confirmed) {
   if (!m||m==='unknown') return '';
-  if (m==='DTG') return '<span class="tag tag-dtg">DTG</span>';
-  if (m==='HTV') return '<span class="tag tag-htv">HTV</span>';
-  if (m==='embroidery') return '<span class="tag tag-embroidery">Embroidery</span>';
-  if (m==='sublimation') return '<span class="tag tag-sublimation">Sublimation</span>';
-  return '<span class="tag tag-type">' + m + '</span>';
+  const labels = {'DTG':'DTG','screen print':'Screen Print','HTV':'HTV','embroidery':'Embroidery','sublimation':'Sublimation'};
+  const label = labels[m] || m;
+  const cls = confirmed ? 'tag-type' : 'tag-inferred';
+  return '<span class="tag ' + cls + '">' + label + '</span>';
 }
 
 function parsePrice(p) { return parseFloat((p||'0').replace(/[^0-9.]/g,''))||0; }
@@ -667,13 +1789,20 @@ function card(item) {
   const revBadge = item.reviews > 0
     ? '<div class="reviews-badge"><span class="star">&#9733;</span> ' + item.reviews.toLocaleString() + '</div>' : '';
   const shirtBadge = shirt ? '<div class="shirt-badge">Shirt</div>' : '';
+  const estSales = item.estimated_monthly_sales > 0
+    ? '<span class="est-sales-badge"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:3px;vertical-align:middle"><path d="M1 1h2.5l1.8 8.5h7.4l1.8-5.5H4.5"/><circle cx="6.5" cy="13" r="1.2"/><circle cx="11.5" cy="13" r="1.2"/></svg>~' + item.estimated_monthly_sales + ' sales/mo</span>' : '';
+  const favBadge = (item.favorites_count || 0) > 0
+    ? '<span class="fav-badge">&#9829; ' + item.favorites_count.toLocaleString() + ' favorites</span>' : '';
   const revLine = item.reviews > 0
     ? '<span class="reviews-text"><strong>' + item.reviews.toLocaleString() + '</strong> reviews &middot; &#9733; ' + item.rating + '</span>'
     : '<span class="reviews-text" style="color:var(--text-muted)">No reviews yet &middot; &#9733; ' + item.rating + '</span>';
   const phrases = (item.key_phrases||[]).map(p=>'<span class="phrase">'+p+'</span>').join('');
-  const demandHtml = (item.demand_signals||[]).length > 0
-    ? (item.demand_signals||[]).map(s=>'<span class="demand-signal">&#128293; '+s+'</span>').join(' ')
-    : '';
+  const signalParts = [
+    ...(item.demand_signals||[]).map(s=>'<span class="demand-signal">&#128293; '+s+'</span>'),
+    estSales,
+    favBadge
+  ].filter(Boolean);
+  const signalsRow = signalParts.length > 0 ? '<div class="signals-row">' + signalParts.join('') + '</div>' : '';
   const imgInner = item.image_url
     ? '<img src="' + item.image_url + '" alt="" loading="lazy">'
     : '<div class="card-img-label">' + item.product_type + '</div>';
@@ -687,14 +1816,15 @@ function card(item) {
     + '<div class="tags">'
     + (shirt ? '<span class="tag tag-shirt">&#128085; Apparel</span>' : '')
     + '<span class="tag tag-type">' + item.product_type + '</span>'
-    + printTag(item.print_method)
+    + printTag(item.print_method, item.print_method_confirmed)
     + (item.blank ? '<span class="tag tag-type">' + item.blank + '</span>' : '')
+    + (item.mockup_style && item.mockup_style !== 'unknown' ? '<span class="tag tag-mockup">&#128247; ' + item.mockup_style.replace(/-/g,' ') + '</span>' : '')
     + '</div>'
     + '<div class="design-style">' + item.design_style + '</div>'
     + (phrases ? '<div class="key-phrases">' + phrases + '</div>' : '')
-    + (demandHtml ? '<div>' + demandHtml + '</div>' : '')
+    + signalsRow
     + '<div class="shop-row"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="7" width="12" height="8" rx="1"/><path d="M5 7V5a3 3 0 116 0v2"/></svg>'
-    + (item.shop_name||'—') + '</div>'
+    + (item.shop_name ? '<a href="https://www.etsy.com/shop/' + item.shop_name + '" target="_blank" class="shop-link">' + item.shop_name + ' &#8599;</a>' : '—') + '</div>'
     + '</div>'
     + (item.notes ? '<div class="notes-row">' + item.notes + '</div>' : '')
     + '<div class="card-footer"><a class="open-btn" href="' + item.url + '" target="_blank">Open on Etsy &#8599;</a></div>'
@@ -703,7 +1833,8 @@ function card(item) {
 
 function render() {
   let items = [...DATA];
-  if (sort==='reviews') items.sort((a,b)=>b.reviews-a.reviews);
+  if (sort==='est-sales') items.sort((a,b)=>(b.estimated_monthly_sales||0)-(a.estimated_monthly_sales||0));
+  else if (sort==='reviews') items.sort((a,b)=>b.reviews-a.reviews);
   else if (sort==='price-asc') items.sort((a,b)=>parsePrice(a.price)-parsePrice(b.price));
   else if (sort==='price-desc') items.sort((a,b)=>parsePrice(b.price)-parsePrice(a.price));
   else if (sort==='rating') items.sort((a,b)=>(b.rating||0)-(a.rating||0));
@@ -754,10 +1885,110 @@ function setSort(v) { sort=v; render(); }
 
 render();
 </script>
+
+<footer style="max-width:1200px;margin:40px auto 24px;padding:0 20px;">
+  <details style="background:#F9FAFB;border:1px solid #E5E7EB;border-radius:8px;padding:0;">
+    <summary style="padding:14px 18px;cursor:pointer;font-size:13px;font-weight:600;color:#6B7280;user-select:none;">
+      &#128202; How these numbers are calculated
+    </summary>
+    <div style="padding:6px 18px 22px;font-size:12.5px;color:#374151;line-height:1.7;">
+
+      <!-- ── SECTION 1: LISTING LEVEL ── -->
+      <p style="margin:14px 0 8px;font-size:13px;font-weight:700;color:#111;">📋 Listing-level  <span style="font-weight:400;font-size:12px;color:#6B7280;">(🔍 Competitor Report tab)</span></p>
+      <table style="border-collapse:collapse;width:100%;font-size:12px;">
+        <tr style="background:#F3F4F6;">
+          <td style="padding:7px 10px;font-weight:600;white-space:nowrap;width:170px;">reviews_per_month</td>
+          <td style="padding:7px 10px;">Total reviews &divide; months since oldest visible review date (min 1 month). Lifetime review velocity &mdash; not the current month alone.</td>
+        </tr>
+        <tr>
+          <td style="padding:7px 10px;font-weight:600;white-space:nowrap;">estimated_monthly_sales</td>
+          <td style="padding:7px 10px;">reviews_per_month &times; 7. The 1:7 ratio (1 review &asymp; 7 sales) is the standard POD apparel estimate &mdash; same formula used by eRank, Alura, Sale Samurai. <strong>Accuracy: &plusmn;20&ndash;30%.</strong> Use for ranking and comparison only. Non-apparel ratios: handmade &asymp; 1:4, digital &asymp; 1:15.</td>
+        </tr>
+        <tr style="background:#F3F4F6;">
+          <td style="padding:7px 10px;font-weight:600;white-space:nowrap;">favorites_per_review</td>
+          <td style="padding:7px 10px;">favorites_count &divide; reviews. &nbsp;<strong>&gt;5.0</strong> = high saves, low conversion (people browse but don&rsquo;t buy) &nbsp;&middot;&nbsp; <strong>1&ndash;5</strong> = healthy active listing &nbsp;&middot;&nbsp; <strong>&lt;1.0</strong> = legacy listing, interest fading.</td>
+        </tr>
+        <tr>
+          <td style="padding:7px 10px;font-weight:600;white-space:nowrap;">velocity badge</td>
+          <td style="padding:7px 10px;">
+            <span style="background:#D1FAE5;color:#065F46;padding:1px 7px;border-radius:4px;font-size:11px;font-weight:600;">high velocity</span>&nbsp; reviews_per_month &gt; 20 &nbsp;&nbsp;
+            <span style="background:#FEF3C7;color:#92400E;padding:1px 7px;border-radius:4px;font-size:11px;font-weight:600;">legacy</span>&nbsp; reviews_per_month &lt; 2 &mdash; avoid using as a keyword or pricing benchmark.
+          </td>
+        </tr>
+      </table>
+
+      <!-- ── SECTION 2: SHOP LEVEL ── -->
+      <p style="margin:22px 0 8px;font-size:13px;font-weight:700;color:#111;">🏪 Shop-level  <span style="font-weight:400;font-size:12px;color:#6B7280;">(🏪 Shop Intelligence tab)</span></p>
+
+      <p style="margin:0 0 6px;font-size:12px;font-weight:600;color:#374151;">Signals — three independent estimates cross-checked against each other</p>
+      <table style="border-collapse:collapse;width:100%;font-size:12px;">
+        <tr style="background:#F3F4F6;">
+          <td style="padding:7px 10px;font-weight:600;white-space:nowrap;width:170px;">M1 — Lifetime avg</td>
+          <td style="padding:7px 10px;"><strong>total_sales &divide; months_active.</strong> Scraped from the shop page. Stable signal but lags &mdash; a fast-growing shop will look underestimated here.</td>
+        </tr>
+        <tr>
+          <td style="padding:7px 10px;font-weight:600;white-space:nowrap;">M2 — Current pace</td>
+          <td style="padding:7px 10px;"><strong>(review_count &divide; span_days) &times; 30 &times; 7.</strong> Scrapes up to 20 pages of the shop&rsquo;s /reviews, stopping when the oldest review reaches 5 months ago. Counts every review occurrence including multiple reviews on the same day. Calculates a daily rate, projects to 30 days, multiplies by 7. 5-month window smooths seasonal spikes (Father&rsquo;s Day, Christmas). Most responsive signal &mdash; reflects what the shop is doing <em>right now</em>.</td>
+        </tr>
+        <tr style="background:#F3F4F6;">
+          <td style="padding:7px 10px;font-weight:600;white-space:nowrap;">M3 — Listing rollup</td>
+          <td style="padding:7px 10px;"><strong>Sum of estimated_monthly_sales for all this shop&rsquo;s listings in competitors.json.</strong> Bottom-up cross-check. Usually a lower bound &mdash; competitors.json only contains top scraped listings, not every listing the shop has.</td>
+        </tr>
+        <tr>
+          <td style="padding:7px 10px;font-weight:600;white-space:nowrap;">Headline (Est/mo)</td>
+          <td style="padding:7px 10px;">Priority order: <strong>M2 &rarr; M1 &rarr; M3.</strong> M2 used first (most current). Falls back to M1 if too few reviews were scraped, then M3 as last resort.</td>
+        </tr>
+      </table>
+
+      <p style="margin:14px 0 6px;font-size:12px;font-weight:600;color:#374151;">Trend &mdash; is the shop accelerating or slowing down?</p>
+      <p style="margin:0 0 8px;font-size:12px;color:#6B7280;">Formula: <strong>M2 &divide; M1</strong>. Compares current pace to lifetime average.</p>
+      <table style="border-collapse:collapse;width:100%;font-size:12px;">
+        <tr>
+          <td style="padding:7px 10px;font-weight:600;white-space:nowrap;width:170px;"><span style="background:#D1FAE5;color:#065F46;padding:2px 9px;border-radius:999px;">↑ Growing</span></td>
+          <td style="padding:7px 10px;">M2 &divide; M1 &ge; 1.3 &mdash; selling 30%+ faster than lifetime average. Accelerating.</td>
+        </tr>
+        <tr style="background:#F3F4F6;">
+          <td style="padding:7px 10px;font-weight:600;white-space:nowrap;"><span style="background:#DBEAFE;color:#1E40AF;padding:2px 9px;border-radius:999px;">→ Stable</span></td>
+          <td style="padding:7px 10px;">M2 &divide; M1 between 0.6 and 1.3 &mdash; current pace matches historical average.</td>
+        </tr>
+        <tr>
+          <td style="padding:7px 10px;font-weight:600;white-space:nowrap;"><span style="background:#FEE2E2;color:#B91C1C;padding:2px 9px;border-radius:999px;">↓ Declining</span></td>
+          <td style="padding:7px 10px;">M2 &divide; M1 &le; 0.6 &mdash; selling 40%+ slower than lifetime average. Slowing down.</td>
+        </tr>
+        <tr style="background:#F3F4F6;">
+          <td style="padding:7px 10px;font-weight:600;white-space:nowrap;"><span style="background:#F3F4F6;color:#6B7280;padding:2px 9px;border-radius:999px;border:1px solid #D1D5DB;">– Unknown</span></td>
+          <td style="padding:7px 10px;">M2 or M1 unavailable &mdash; cannot compute ratio.</td>
+        </tr>
+      </table>
+
+      <p style="margin:14px 0 6px;font-size:12px;font-weight:600;color:#374151;">Confidence &mdash; how much do the three signals agree?</p>
+      <p style="margin:0 0 8px;font-size:12px;color:#6B7280;">Measured as: <strong>(max signal &minus; min signal) &divide; max signal</strong>. The further the signals diverge, the lower the confidence.</p>
+      <table style="border-collapse:collapse;width:100%;font-size:12px;">
+        <tr style="background:#F3F4F6;">
+          <td style="padding:7px 10px;font-weight:600;white-space:nowrap;width:170px;"><span style="background:#D1FAE5;color:#065F46;padding:2px 9px;border-radius:4px;">High</span></td>
+          <td style="padding:7px 10px;">Signals diverge &lt;40%. M1, M2, M3 all agree &mdash; estimate is reliable.</td>
+        </tr>
+        <tr>
+          <td style="padding:7px 10px;font-weight:600;white-space:nowrap;"><span style="background:#FEF3C7;color:#92400E;padding:2px 9px;border-radius:4px;">Medium</span></td>
+          <td style="padding:7px 10px;">Signals diverge 40&ndash;70%. Directionally correct &mdash; use with caution.</td>
+        </tr>
+        <tr style="background:#F3F4F6;">
+          <td style="padding:7px 10px;font-weight:600;white-space:nowrap;"><span style="background:#FEE2E2;color:#B91C1C;padding:2px 9px;border-radius:4px;">Low</span></td>
+          <td style="padding:7px 10px;">Signals diverge &gt;70% or only one signal available. Use the lower value as a conservative estimate.</td>
+        </tr>
+      </table>
+
+      <p style="margin:18px 0 0;font-size:11.5px;color:#9CA3AF;border-top:1px solid #E5E7EB;padding-top:12px;">
+        All estimates use publicly visible Etsy data. Etsy does not share real sales figures with third parties &mdash; no tool (eRank, Alura, Sale Samurai) has access to actual transaction data. These estimates use the same review-based methodology those tools use.
+      </p>
+    </div>
+  </details>
+</footer>
+
 </body>
 </html>"""
 
-    return head + topbar + insights_tab + competitors_tab + script
+    return head + topbar + insights_tab + competitors_tab + shop_intel_tab + script
 
 
 def main():
@@ -765,25 +1996,44 @@ def main():
     parser.add_argument('--niche', required=True, help='Niche folder name, e.g. personalized-gift-for-dad')
     args = parser.parse_args()
 
-    json_path     = BASE_DIR / 'projects' / args.niche / '01-research' / 'competitors.json'
-    insights_path = BASE_DIR / 'projects' / args.niche / '01-research' / 'market-insights.md'
-    out_path      = BASE_DIR / 'projects' / args.niche / '01-research' / 'competitor-report.html'
+    json_path      = BASE_DIR / 'projects' / args.niche / '01-research' / 'competitors.json'
+    insights_path  = BASE_DIR / 'projects' / args.niche / '01-research' / 'market-insights.md'
+    watchlist_path = BASE_DIR / 'projects' / args.niche / '01-research' / 'shop-watchlist.json'
+    patterns_path  = BASE_DIR / 'projects' / args.niche / '01-research' / 'patterns-config.json'
+    dates_path     = BASE_DIR / 'projects' / args.niche / '01-research' / 'scrapes' / 'listing-dates.json'
+    out_path       = BASE_DIR / 'projects' / args.niche / '01-research' / 'competitor-report.html'
 
     if not json_path.exists():
         print(f"✗ Not found: {json_path}")
         return
 
-    comp_data   = json.load(open(json_path))
-    insights_md = insights_path.read_text() if insights_path.exists() else None
-    date_str    = datetime.date.today().isoformat()
+    comp_data       = json.load(open(json_path))
+    insights_md     = insights_path.read_text() if insights_path.exists() else None
+    watchlist       = json.loads(watchlist_path.read_text()) if watchlist_path.exists() else []
+    patterns_config = json.loads(patterns_path.read_text()) if patterns_path.exists() else None
 
-    html = build_html(args.niche, comp_data, insights_md, date_str)
+    # Refresh Section 6 tables from live data before rendering
+    if insights_md and patterns_config:
+        insights_md = update_demand_signals_in_md(insights_md, comp_data, patterns_config)
+        insights_path.write_text(insights_md)
+    date_str        = datetime.date.today().isoformat()
+
+    ems_reliable = False
+    if dates_path.exists():
+        dates_data = json.loads(dates_path.read_text())
+        ems_reliable = bool(dates_data)
+    if not ems_reliable:
+        print('  ⚠ listing-dates.json missing or empty — EMS/RPM will show as N/A. Connect Etsy API to fix.')
+
+    html = build_html(args.niche, comp_data, insights_md, watchlist, date_str, ems_reliable, patterns_config)
     out_path.write_text(html)
 
     shirt_count = sum(1 for e in comp_data if e.get('is_shirt'))
     print(f"✓ Generated {out_path}")
     print(f"  {len(comp_data)} listings · {shirt_count} shirts · {date_str}")
-    print(f"  Market insights tab: {'✓ included' if insights_md else '✗ market-insights.md not found'}")
+    print(f"  Market insights:   {'✓ included' if insights_md else '✗ market-insights.md not found'}")
+    print(f"  Design patterns:   {'✓ ' + str(len(patterns_config.get('patterns',[]))) + ' patterns' if patterns_config else '✗ patterns-config.json not found'}")
+    print(f"  Shop intelligence: {'✓ ' + str(len(watchlist)) + ' shops' if watchlist else '✗ shop-watchlist.json not found'}")
 
 
 if __name__ == '__main__':

@@ -10,17 +10,18 @@
 
 | Gap | Name | Stage | Files Touched | Status |
 |---|---|---|---|---|
-| GAP-12 | Add Phase 0 Niche Discovery | Phase 0 | WORKFLOW.md, shared/seasonal-calendar.md | 🔴 Open |
-| GAP-13 | Alura top-sellers scraper | Phase 0 | scripts/research-top-sellers.py, WORKFLOW.md | 🔴 Open |
-| GAP-07 | Schema: sales estimate + velocity fields | Phase 1.2 | extract-competitors-prompt.md, generate-competitor-report.py | 🔴 Open |
-| GAP-09 | Schema: mockup_style field | Phase 1.2 | extract-competitors-prompt.md, WORKFLOW.md Phase 3.1 | 🔴 Open |
-| GAP-01 | Competitor shop watchlist | Phase 1.2 | shop-watchlist.json (new), eRank via Playwright | 🔴 Open |
+| GAP-12 | Add Phase 0 Niche Discovery | Phase 0 | WORKFLOW.md, shared/seasonal-calendar.md | ✅ Done |
+| GAP-13 | Alura top-sellers scraper | Phase 0 | scripts/research-top-sellers.py, WORKFLOW.md | ✅ Done |
+| GAP-07 | Schema: sales estimate + velocity fields | Phase 1.2 | extract-competitors-prompt.md, generate-competitor-report.py, research-competitors.py | ✅ Done |
+| GAP-09 | Schema: mockup_style field | Phase 1.2 | extract-competitors-prompt.md, WORKFLOW.md Phase 3.1 | ✅ Done |
+| GAP-01 | Competitor shop watchlist | Phase 1.2 | scripts/research-shops.py, shop-watchlist.json | ✅ Done |
 | GAP-05 | Visual inspiration board | Phase 1.2 | inspiration-images/, inspiration-board.md (new) | 🔴 Open |
-| GAP-02 | Monthly sales per listing (eRank) | Phase 1.4 | keywords.md | 🔴 Open |
-| GAP-10 | eRank trend direction | Phase 1.4 | keywords.md, WORKFLOW.md | 🔴 Open |
-| GAP-08 | Niche Verdict mandatory block | Phase 1.3→2 gate | extract-competitors-prompt.md, WORKFLOW.md | 🔴 Open |
+| GAP-02 | Monthly sales per listing (eRank) | — | ✅ Merged into GAP-07 | ✅ Merged |
+| GAP-10 | eRank trend direction | Phase 1.4 | keywords.md, WORKFLOW.md | ✅ Done |
+| GAP-08 | Niche Verdict mandatory block | Phase 1.3→2 gate | extract-competitors-prompt.md, WORKFLOW.md | ✅ Done |
 | GAP-04 | Sub-niche angle decision | Phase 1.3→2 gate | 02-design/brief.md | 🔴 Open |
 | GAP-11 | Phase 6.5 Pre-Publish Audit | Phase 6.5 | WORKFLOW.md | 🔴 Open |
+| GAP-14 | Product + Print Provider selection guide | Phase 2 | WORKFLOW.md, shared/pp-selection-guide.md, scripts/fetch-pp-costs.py | ✅ Done |
 | GAP-03 | 15/month rule go/no-go gate | — | ✅ Merged into GAP-08 | ✅ Merged |
 | GAP-06 | Seasonal launch timing check | — | ✅ Merged into GAP-12 | ✅ Merged |
 
@@ -98,7 +99,7 @@ Running a full Phase 1 scrape on a dead niche wastes time and Firecrawl credits.
 | St. Patrick's Day | Mar 17 | Feb 10 |
 | Easter | varies | 35 days prior |
 
-**Status:** 🔴 Open
+**Status:** ✅ Done — Added Phase 0 to WORKFLOW.md (Steps 0.1–0.5: autocomplete script, cross-niche substitution, eRank volume check, timing check, optional Alura check). Created `shared/seasonal-calendar.md` with 12 holidays + "start by" dates + evergreen niche list. Created `scripts/research-autocomplete.py` (Playwright, US context, letter-suffix variants, ranked output). Absorbs GAP-06.
 
 ---
 
@@ -184,7 +185,7 @@ if __name__ == "__main__":
 
 > "If `top-sellers-clothing.json` exists, check whether any of the Alura top sellers appear in our scraped competitors. If a listing appears in both, note it — it is doubly validated (our scrape + Alura's estimate)."
 
-**Status:** 🔴 Open
+**Status:** ✅ Done — Created `scripts/research-top-sellers.py` using Firecrawl CLI (4s JS wait, sanity-checks for sales figures, exits gracefully if page changes). WORKFLOW.md Phase 0 Step 0.5 covers the Alura check and Claude extraction instructions. Stability caveat documented in both script and WORKFLOW.md.
 
 ---
 
@@ -248,7 +249,7 @@ And add the sort case to the `setSort` JS function and the `render()` sort block
 
 6. Update `scripts/extract-competitors-prompt.md` synthesis instruction for market-insights.md: replace "sort by review count" with "sort by estimated_monthly_sales descending. Call out top 3 listings by estimated_monthly_sales as benchmark listings. Flag any listing with favorites_per_review above 5.0 (high interest, possible conversion gap). Flag any listing with reviews_per_month below 2 as legacy — do not use as a pricing or keyword benchmark."
 
-**Status:** 🔴 Open
+**Status:** ✅ Done — Added 6 schema fields (favorites_count, most_recent_review_date, oldest_visible_review_date, reviews_per_month, estimated_monthly_sales, favorites_per_review). Added FAVORITES RULE + REVIEW DATE RULE to extraction rules. Added velocity self-check (#5). Added synthesis instruction. Updated generate-competitor-report.py to sort by estimated_monthly_sales (default), added est-sales badge to cards. Added Etsy API creation date fetch (Step 3) to research-competitors.py with oldest_visible_review_date fallback. Updated .env.example + SETUP.md.
 
 ---
 
@@ -290,7 +291,7 @@ The mockup decision in Phase 3 should come from data, not a separate manual brow
 
 > "Check the 'Recommended Mockup Style' section in market-insights.md — this is derived from the Phase 1 competitor scrape and is the primary input for slot 1. You may still browse eRank Listing View to confirm, but the scraped data takes precedence."
 
-**Status:** 🔴 Open
+**Status:** ✅ Done — Added `mockup_style` field to schema after `design_style`. Added MOCKUP STYLE RULE (7-value classification from description text only, not image URLs). Added Recommended Mockup Style synthesis instruction to market-insights.md block. Updated WORKFLOW.md Phase 3.1 to read from market-insights.md first, fall back to eRank Listing View only when majority are `unknown`.
 
 ---
 
@@ -336,7 +337,7 @@ A listing with 532 reviews could be a dead shop now making 2 sales/month. Withou
 6. For monthly sales: log into eRank using Playwright (already confirmed working), run each shop URL through eRank's shop analyzer, and fill in `monthly_sales_estimated`.
 7. Flag any shop with monthly sales < 15 — those are not worth studying closely (Alek's threshold).
 
-**Status:** 🔴 Open
+**Status:** ✅ Done — Created `scripts/research-shops.py`. Scrapes public Etsy shop pages via Firecrawl (no API, no login). Derives shop monthly sales from 3 signals: Method 1 (total_sales ÷ months_active), Method 2 (rate-based review projection × 7 using dynamic 5-month / 20-page window to smooth seasonal spikes), Method 3 (listing rollup from competitors.json). Cross-validates all three, sets confidence High/Medium/Low based on signal divergence (<40% = high, 40–70% = medium, >70% = low), adds trend signal (growing/stable/declining) via M2 ÷ M1 ratio. Results feed into the Shop Intelligence tab in competitor-report.html. eRank not needed — confirmed it uses the same review-based formula. Run: `python3 scripts/research-shops.py --niche <niche>`
 
 ---
 
@@ -358,7 +359,7 @@ Firecrawl can scrape Etsy listing pages and extract image URLs. We can then down
 4. Create `projects/personalized-gift-for-dad/01-research/inspiration-board.md` — a markdown file that references each image with a one-line note on what to take from it (e.g., "font weight on DAD", "how names are spaced", "which Comfort Colors shade in mockup").
 5. Add a link to `inspiration-board.md` at the top of `02-design/brief.md` so it's always referenced alongside the text brief.
 
-**Status:** 🔴 Open
+**Status:** ✅ Merged into GAP-07 — GAP-07 already adds `reviews_per_month` and `estimated_monthly_sales` (reviews_per_month × 7) to every listing in `competitors.json`. The 15/month threshold check is covered by the Niche Verdict block (GAP-08). No separate eRank session needed.
 
 ---
 
@@ -391,7 +392,7 @@ Monthly sales data is not on the public Etsy listing page. It requires eRank's L
 6. If fewer than 3 of the 5 listings clear 15 sales/month: flag the niche as unvalidated and document the finding. Do not proceed to more designs until this is resolved.
 7. If 3+ listings clear the threshold: niche is validated. Update `market-insights.md` Section 7 (Niche Demand Health) to reflect confirmed sales data, not just cart signal proxies.
 
-**Status:** 🔴 Open
+**Status:** ✅ Done — Added Stop Check section to WORKFLOW.md between Phase 1.4 and Phase 2 (Enter / Enter with sub-niche pivot / Do not enter). Added Niche Verdict block template to extract-competitors-prompt.md output section — Claude fills this in and saves it to top of market-insights.md after building competitors.json. Verdict references estimated_monthly_sales + is_bestseller + in_carts from competitors.json and trend direction from keywords.md (GAP-10).
 
 ---
 
@@ -423,7 +424,7 @@ A declining trend on the primary keyword downgrades the whole niche. A rising tr
 
 2. Open `projects/<niche>/01-research/keywords.md` template. Add a `Trend Direction` column to the keyword data table.
 
-**Status:** 🔴 Open
+**Status:** ✅ Done — Added Step 5 to Phase 1.4 in WORKFLOW.md: while in eRank, record trend direction per keyword (Rising / Stable / Declining / Seasonal / Unknown) in a Trend column in keywords.md. Added adjustment rule: Rising = upgrade Demand Signal one level, Declining = downgrade, Seasonal = note peak month, Unknown = leave unadjusted and flag in Verdict confidence. Free-plan fallback: check eRank's Top 10 Trending Keywords list.
 
 ---
 
@@ -515,6 +516,84 @@ This is a strategic decision for the user to make. Data to support the decision 
 4. All design decisions (fonts, colors, mockup aesthetic) must serve that one sentence. If a design decision doesn't serve it, reject it.
 
 **Status:** 🔴 Open | Decision needed from user
+
+---
+
+---
+
+## STAGE: Phase 2 — Design Brief / Product Selection
+
+> Product and print provider must be locked before mockups (Phase 3) begin.
+> The blank determines the mockup template, color palette, and pricing floor.
+
+---
+
+### GAP-14 — No structured product + print provider selection process
+
+**What's missing:**
+WORKFLOW.md has no step that walks through *how* to pick a product blank (e.g., Gildan 5000 vs Bella+Canvas 3001 vs Comfort Colors 1717) and which print provider (PP) to use for it. The current process implies you already know what to pick. There is also no step that uses the Printify API to compare real costs across providers for the same product before committing.
+
+**Why it matters:**
+The PP choice directly sets the cost floor. Two providers offering the same Gildan 5000 can differ by $2–4 per unit, which shifts margin by 15–20 percentage points. Provider location also affects shipping speed to your target market (US-based PP = faster US delivery = better review scores). Picking the wrong blank or the wrong PP at this stage is expensive to undo after mockups and listing copy are done.
+
+**Firecrawl?** No.
+All data needed is available via the Printify API: `GET /v1/catalog/blueprints.json` (all products), `GET /v1/catalog/blueprints/{id}/print_providers.json` (providers for a product), `GET /v1/catalog/blueprints/{id}/print_providers/{pp_id}/variants.json` (costs per color/size). No scraping required. Cross-reference with memory: [[feedback-pricing-check-costs-first]] covers the cost fetch rule.
+
+**Fix — step by step:**
+1. Create `shared/pp-selection-guide.md` with these sections:
+
+   **Blank selection criteria**
+   | Criterion | Guidance |
+   |---|---|
+   | Competitor blank | Read competitors.json — what `blank` field is most common among top-3 by estimated_monthly_sales? Start there unless you have a specific reason not to. |
+   | Price tier | Gildan 5000 = budget ($8–10 cost), Bella+Canvas 3001 = mid ($12–15), Comfort Colors 1717 = premium ($16–20). Match to your niche's pricing ceiling. |
+   | Color range | Check how many colors are in Printify catalog for that blank. More colors = more variant potential but approaches the 100-variant cap faster. |
+   | Unisex vs fitted | Most POD shirts are unisex. Only choose fitted if competitor research shows it. |
+
+   **Print provider selection criteria**
+   | Criterion | Guidance |
+   |---|---|
+   | Location | Prefer US-based PP if your target market is US buyers. Check PP location on Printify catalog page. |
+   | Quality score | Printify shows a 0–5 quality rating per PP. Prefer 4.5+. |
+   | Production time | Check estimated production days shown in Printify catalog. Under 3 business days preferred. |
+   | Cost per variant | Must fetch via API — never estimate. Use scripts/fetch-pp-costs.py (see step 3). |
+   | Monster Digital note | Confirmed working for Gildan 5000 (from prior session). US-based. Good quality score. Use as default unless cost comparison shows a better option. |
+
+   **Decision order**
+   1. Check competitors.json → most common `blank` field → that's your starting candidate.
+   2. Confirm it's in Printify catalog and available from at least one US PP with quality 4.5+.
+   3. Fetch costs via API. Build margin table. Confirm 60% margin target is achievable (sell price = cost × 2.5).
+   4. If margin target fails → try next blank up the price ladder (not down — lower-cost blanks usually have worse quality scores).
+   5. Lock blank + PP. Write the choice at the top of `02-design/brief.md` before any design work.
+
+2. Open `WORKFLOW.md`. At the start of Phase 2 (Design Brief), add:
+
+   > **Phase 2.0 — Lock Product + Print Provider (do this before any design work)**
+   >
+   > 1. Check `competitors.json` → most common `blank` value among top 3 by `estimated_monthly_sales`.
+   > 2. Find the blank in Printify catalog. Run: `python3 scripts/fetch-pp-costs.py --blueprint <id>` to compare costs across available print providers.
+   > 3. Build a margin table (see `shared/pp-selection-guide.md`). Confirm cost × 2.5 ≥ market price ceiling identified in Phase 1.
+   > 4. Pick PP. Record selection at top of `02-design/brief.md`:
+   >    ```
+   >    Blank: [name]  |  Printify Blueprint ID: [id]  |  Print Provider: [name] (ID: [id])
+   >    Cost (S–2XL avg): $[X]  |  List price: $[Y]  |  Target margin: [Z]%
+   >    ```
+   > 5. Do NOT proceed to Phase 2.1 (design brief text) until this block is filled in.
+
+3. Create `scripts/fetch-pp-costs.py` — a helper that calls the Printify API and prints a comparison table of all print providers for a given blueprint, sorted by average cost:
+
+   ```
+   Blueprint 12 (Gildan 5000)
+   ─────────────────────────────────────────────────────
+   PP ID  Provider Name        Location    Quality  S      M      L      XL     2XL    Avg
+   29     Monster Digital      US          4.8      $8.42  $8.42  $8.42  $8.42  $9.98  $8.73
+   99     SPOD                 US/EU       4.4      $9.11  $9.11  $9.11  $9.11 $10.50  $9.39
+   ...
+   ```
+
+   This replaces the manual Printify dashboard cost lookup and makes cost checking a one-command step.
+
+**Status:** ✅ Done — Created `scripts/fetch-pp-costs.py` (fetches Printify API costs for all print providers on a blueprint, prints comparison table sorted by avg cost S–2XL, shows min list price at 60% margin) and `shared/pp-selection-guide.md` (6-step decision guide). Added Phase 2.0 block to WORKFLOW.md. Run: `python3 scripts/fetch-pp-costs.py --blueprint <id>`
 
 ---
 
