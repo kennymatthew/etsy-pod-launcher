@@ -600,11 +600,11 @@ def build_listing_pricing_strategy_section(comp_data):
 
     # ── Part 3: How search prices are manipulated ─────────────────────────────
 
-    price_mins = [e.get('price_min') for e in comp_data if e.get('price_min') is not None]
+    price_real_mins = [e.get('price_real_min') for e in comp_data if e.get('price_real_min') is not None]
     real_mins  = [e.get('price_real_min') for e in comp_data if e.get('price_real_min') is not None]
 
-    if price_mins and real_mins:
-        median_display = sorted(price_mins)[len(price_mins) // 2]
+    if price_real_mins and real_mins:
+        median_display = sorted(price_real_mins)[len(price_real_mins) // 2]
         median_real    = sorted(real_mins)[len(real_mins) // 2]
         gap_pct = round((median_real - median_display) / median_display * 100) if median_display else 0
         illusion_warn = (

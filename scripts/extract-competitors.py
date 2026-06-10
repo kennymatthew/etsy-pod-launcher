@@ -30,13 +30,24 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).parent.parent
 
+CAPTCHA_SIGNALS = [
+    'verify you', 'are you human', 'robot check', 'access denied',
+    'captcha', 'unusual traffic', "this page isn't", 'security check',
+    'please enable cookies', 'cf-browser-verification',
+]
+
+def _is_captcha(content):
+    low = content[:3000].lower()
+    return any(sig in low for sig in CAPTCHA_SIGNALS)
+
+
 MONTHS_MAP = {
     'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
     'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
 }
 
 SHIRT_KEYWORDS = [
-    't-shirt', 'tshirt', 'tee shirt', ' tee ', ' tee,', 'sweatshirt',
+    't-shirt', 'tshirt', 'tee shirt', ' tee', 'sweatshirt',
     'hoodie', 'tank top', 'crewneck', 'crew neck', 'long sleeve',
     'pullover', 'raglan', 'comfort colors shirt', 'gildan shirt',
     ' shirt', 'shirt,', 'shirt.',   # catches "Pet Shirt", "Dog Shirt", etc.
@@ -139,8 +150,12 @@ def _clean_color_candidate(raw: str):
         a, _, b = s.rpartition(' - ')
         b = b.strip()
         if _COLOR_SIZE_RE.match(b):
-            # B is a size: A is either a colour (keep) or product type (drop)
-            return None if _COLOR_PRODUCT_START_RE.search(a) else a.strip()
+            # B is a size: A is either a colour or "Brand - Color" — recurse to unwrap
+            if _COLOR_PRODUCT_START_RE.search(a):
+                return None
+            if ' - ' in a:
+                return _clean_color_candidate(a)
+            return a.strip()
         else:
             # B is likely a colour name (e.g. "Comfort Colors Shirt - White")
             return b
@@ -200,6 +215,25 @@ BLANK_PATTERNS = [
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+_NOISE_PATTERNS = [
+    r'^##\s+More from this shop',
+    r'^##\s+Buy together',
+    r'^##\s+Meet your seller',
+    r'^##\s+Did you know',
+    r'^##\s+Privacy',
+    r'^##\s+Shop policies',
+]
+
+def _noise_boundary(content):
+    """Return the index of the first cross-sell / noise section, or len(content)."""
+    boundary = len(content)
+    for pattern in _NOISE_PATTERNS:
+        m = re.search(pattern, content, re.MULTILINE | re.IGNORECASE)
+        if m and m.start() < boundary:
+            boundary = m.start()
+    return boundary
+
+
 def load_env():
     env = dict(os.environ)
     env_path = BASE_DIR / '.env'
@@ -213,16 +247,20 @@ def load_env():
 
 
 def parse_k_number(s):
-    """Parse '1.6k' → 1600, '5,800' → 5800, '19' → 19."""
-    s = str(s).strip().lower().replace(',', '')
-    if s.endswith('k'):
-        return int(float(s[:-1]) * 1000)
-    return int(float(s))
+    """Parse '1.6k' → 1600, '5,800' → 5800, '19' → 19. Returns 0 on parse failure."""
+    try:
+        s = str(s).strip().lower().replace(',', '')
+        if s.endswith('k'):
+            return int(float(s[:-1]) * 1000)
+        return int(float(s))
+    except (ValueError, AttributeError):
+        return 0
 
 
 def parse_date_str(s):
-    """Parse 'Jun 2, 2026' or '02 Jun, 2026' → '2026-06-02'. Returns None on failure."""
+    """Parse 'Jun 2, 2026', '02 Jun, 2026', 'June 2nd, 2026' → '2026-06-02'. Returns None on failure."""
     s = s.strip()
+    s = re.sub(r'(\d+)(st|nd|rd|th)\b', r'\1', s)
     m = re.match(r'(\w{3})\s+(\d{1,2}),?\s+(\d{4})', s)
     if m:
         month, day, year = m.groups()
@@ -254,31 +292,35 @@ def parse_structured(content, listing_id, creation_date=None):
     m = re.search(r'Price:\s*([^\n]+)', content)
     result['price'] = m.group(1).strip() if m else None
 
-    m = re.search(r'Price:\s*(?:[A-Z]{2,3}\s*)?\$?([\d,]+\.?\d*)', content)
-    result['price_min'] = float(m.group(1).replace(',', '')) if m else None
-
     # Shop name
     m = re.search(r'\[([^\]]+)\]\(https://www\.etsy\.com/shop/([^?/\)]+)', content)
     result['shop_name'] = m.group(1).strip() if m else None
 
-    # Shop sales count
+    # Shop total sales count (shown in listing's shop info — lifetime shop figure, not listing-level)
     m = re.search(r'([\d,]+(?:\.\d+)?k?)\s+sales', content, re.IGNORECASE)
-    result['sales'] = parse_k_number(m.group(1)) if m else None
+    result['shop_sales'] = parse_k_number(m.group(1)) if m else None
 
-    # First product image
-    m = re.search(r'https://i\.etsystatic\.com/[^\s\)]+il_794xN[^\s\)]+\.jpg', content)
-    result['image_url'] = m.group(0) if m else None
+    # All product listing images — only from before cross-sell noise sections
+    img_section = content[:_noise_boundary(content)]
+    all_img_urls = list(dict.fromkeys(
+        re.findall(r'https://i\.etsystatic\.com/[^\s\)]+il_794xN[^\s\)]+\.jpg', img_section)
+    ))
+    result['image_urls'] = all_img_urls
+    result['image_url']  = all_img_urls[0] if all_img_urls else None
 
     # Badge — Bestseller, Etsy's Pick, Rare find (mutually exclusive; first match wins)
+    # Etsy shows exactly one badge per listing (mutually exclusive, single UI slot).
+    # Priority order matches Etsy's own display hierarchy.
     if re.search(r'(?m)^Bestseller\s*$', content, re.IGNORECASE):
         result['badge'] = 'Bestseller'
-    elif re.search(r"Etsy[’']?s?\s*Pick", content, re.IGNORECASE):
+    elif re.search(r"Etsy['']?s?\s*Pick", content, re.IGNORECASE):
         result['badge'] = "Etsy's Pick"
+    elif re.search(r'\bPopular\s+Now\b', content, re.IGNORECASE):
+        result['badge'] = 'Popular Now'
     elif re.search(r'\bRare\s+find\b', content, re.IGNORECASE):
         result['badge'] = 'Rare find'
     else:
         result['badge'] = None
-    # Keep is_bestseller for backwards compatibility
     result['is_bestseller'] = result['badge'] == 'Bestseller'
 
     # In-carts — capture all Etsy cart-count variants and normalise to an integer.
@@ -339,21 +381,21 @@ def parse_structured(content, listing_id, creation_date=None):
     # Has sale
     result['has_sale'] = bool(re.search(r'Sale ends in|Sale Price\s*\$', content, re.IGNORECASE))
 
-    # AI buyer summary (Etsy-generated phrases)
-    m = re.search(r'What buyers say, summarized by AI:\s*\n(.*?)(?=\n##|\Z)', content, re.DOTALL)
-    if m:
-        phrases = []
-        for line in m.group(1).splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            if re.match(r'^[A-Za-z][a-zA-Z &\'\-]{1,38}$', line) and len(line.split()) <= 5:
-                phrases.append(line)
-            elif phrases:
-                break
-        result['ai_buyer_summary'] = phrases if phrases else None
+    # Sale percent (e.g. "30% off")
+    m = re.search(r'(\d+)%\s+off', content, re.IGNORECASE)
+    result['sale_percent'] = int(m.group(1)) if m else None
+
+    # Sale type
+    if re.search(r'limited time sale', content, re.IGNORECASE):
+        result['sale_type'] = 'limited_time'
+    elif result['has_sale']:
+        result['sale_type'] = 'sale'
     else:
-        result['ai_buyer_summary'] = None
+        result['sale_type'] = None
+
+    # Full item description
+    m = re.search(r'## Item details\s*\n(.*?)(?=\n##|\Z)', content, re.DOTALL | re.IGNORECASE)
+    result['description'] = m.group(1).strip() if m else None
 
     # Favorites
     m = re.search(r'\[([\d,]+(?:\.\d+)?k?)\s+favorites?\]', content, re.IGNORECASE)
@@ -374,36 +416,14 @@ def parse_structured(content, listing_id, creation_date=None):
         raw_dates = re.findall(date_pat, rev_section)
         dates = [parse_date_str(d) for d in raw_dates]
         dates = sorted([d for d in dates if d and d > '2000-01-01'], reverse=True)
-        result['most_recent_review_date']   = dates[0]  if dates else None
-        result['oldest_visible_review_date'] = dates[-1] if dates else None
+        result['most_recent_review_date'] = dates[0] if dates else None
     else:
-        result['rating']                    = None
-        result['reviews']                   = 0
-        result['most_recent_review_date']   = None
-        result['oldest_visible_review_date'] = None
-
-    # Derived fields
-    today  = datetime.date.today()
-    anchor = None
-    for s in [creation_date, result.get('oldest_visible_review_date')]:
-        if s:
-            try:
-                anchor = datetime.date.fromisoformat(s)
-                break
-            except ValueError:
-                pass
-
-    reviews = result['reviews']
-    if reviews == 0:
-        result['reviews_per_month']       = 0.0
-        result['estimated_monthly_sales'] = 0
-    else:
-        months = max(1, (today.year - anchor.year) * 12 + (today.month - anchor.month)) if anchor else 1
-        rpm = round(reviews / months, 1)
-        result['reviews_per_month']       = rpm
-        result['estimated_monthly_sales'] = round(rpm * 7)
+        result['rating']                  = None
+        result['reviews']                 = 0
+        result['most_recent_review_date'] = None
 
     fav = result['favorites_count']
+    reviews = result['reviews']
     result['favorites_per_review'] = round(fav / reviews, 1) if reviews > 0 else None
 
     # Pricing fields (parse from full raw content)
@@ -423,22 +443,8 @@ def parse_rule_based(content, title):
     result = {}
     title_lower = (title or '').lower()
 
-    # Find the earliest noise section boundary and truncate there
-    # These sections reference OTHER products from Etsy's cross-sell widgets
-    noise_patterns = [
-        r'^##\s+More from this shop',
-        r'^##\s+Buy together',
-        r'^##\s+Meet your seller',
-        r'^##\s+Did you know',
-        r'^##\s+Privacy',
-        r'^##\s+Shop policies',
-    ]
-    noise_start = None
-    for pattern in noise_patterns:
-        m = re.search(pattern, content, re.MULTILINE | re.IGNORECASE)
-        if m and (noise_start is None or m.start() < noise_start):
-            noise_start = m.start()
-    clean_content = content[:noise_start] if noise_start is not None else content
+    # Truncate at the first cross-sell / noise section
+    clean_content = content[:_noise_boundary(content)]
 
     # Also strip image markdown lines (alt text can describe unrelated products)
     clean_content = re.sub(r'!\[[^\]]*\]\([^)]*\)', '', clean_content)
@@ -581,10 +587,16 @@ def parse_rule_based(content, title):
     )
     result['multi_product_listing'] = len(found_types) > 1
 
-    # ── key_phrases ── (split title on commas, take first 3-5 meaningful phrases)
+    # ── key_phrases ── split on Etsy title separators; fall back to filler words
     if title:
-        parts = [p.strip() for p in re.split(r'[,|–—]', title) if p.strip()]
-        result['key_phrases'] = parts[:5] if len(parts) >= 3 else parts
+        # Primary split: commas, pipes, em-dashes, " + ", " - " (spaced only, avoids "t-shirt")
+        parts = [p.strip() for p in re.split(r'[,|–—]|\s+\+\s+|\s+-\s+', title) if p.strip()]
+        # Fallback for comma-free titles: split on common connector words
+        if len(parts) < 2:
+            parts = [p.strip() for p in re.split(
+                r'\s+(?:for|and|with|by|from|gift)\s+', title, flags=re.I
+            ) if p.strip()]
+        result['key_phrases'] = [p[:60] for p in parts[:5]]
     else:
         result['key_phrases'] = []
 
@@ -607,21 +619,7 @@ def parse_pricing(content):
 
     All values may be None if the data is not found.
     """
-    # Determine noise boundary (same logic as parse_rule_based)
-    noise_patterns = [
-        r'^##\s+More from this shop',
-        r'^##\s+Buy together',
-        r'^##\s+Meet your seller',
-        r'^##\s+Did you know',
-        r'^##\s+Privacy',
-        r'^##\s+Shop policies',
-    ]
-    noise_start = None
-    for pattern in noise_patterns:
-        m = re.search(pattern, content, re.MULTILINE | re.IGNORECASE)
-        if m and (noise_start is None or m.start() < noise_start):
-            noise_start = m.start()
-    raw_content = content[:noise_start] if noise_start is not None else content
+    raw_content = content[:_noise_boundary(content)]
 
     # Regex: match variant lines like "Label ($9.00)" or "Label ($9.00 - $29.25)"
     VARIANT_RE = re.compile(
@@ -737,12 +735,25 @@ def parse_pricing(content):
         anchor_type  = size_anchor_type
         anchor_price = size_anchor_price
 
+    # Non-garment anchor types — digital files, embroidery files, small add-ons.
+    # These should never be used as a price_real_min fallback for a shirt listing.
+    _NON_GARMENT_ANCHORS = {
+        'digital_file', 'embroidery_file', 'sticker', 'magnet', 'keychain',
+        'ornament', 'pin', 'patch', 'card', 'bookmark', 'coaster', 'bandana',
+        'small_item',
+    }
+
     # price_real_min: minimum price among non-anchor variants
     if non_anchor_prices:
         price_real_min = min(non_anchor_prices)
     elif anchor_candidates:
-        # All variants are anchors — fall back to the overall minimum
-        price_real_min = min(p for _, p in anchor_candidates)
+        # Only fall back to anchor price if the anchor is a garment (size-based), not a
+        # non-garment add-on like a digital file — those would give a misleadingly low price.
+        garment_anchors = [(t, p) for t, p in anchor_candidates if t not in _NON_GARMENT_ANCHORS]
+        if garment_anchors:
+            price_real_min = min(p for _, p in garment_anchors)
+        else:
+            price_real_min = None
     else:
         price_real_min = None
 
@@ -790,6 +801,10 @@ def parse_pricing(content):
                 grp: round(max(prices), 2)   # use max within group (most common = representative price)
                 for grp, prices in groups.items()
             }
+        # blank_tiers is the most accurate source for real garment prices — override both bounds
+        all_blank_prices = [p for sizes in blank_tiers.values() for p in sizes.values()]
+        price_real_min = min(all_blank_prices)
+        price_max = max(all_blank_prices)
 
     return {
         'price_max':        round(price_max, 2) if price_max is not None else None,
@@ -807,19 +822,12 @@ def parse_pricing(content):
 def self_check(entries):
     warnings = []
     total    = len(entries)
-    high_vel = sum(1 for e in entries if (e.get('reviews_per_month') or 0) > 20)
-    low_vel  = sum(1 for e in entries if 0 < (e.get('reviews_per_month') or 0) < 2)
     zero_rev = sum(1 for e in entries if e.get('reviews', 0) == 0)
     shirts   = sum(1 for e in entries if e.get('is_shirt'))
 
     if zero_rev > total * 0.3:
         warnings.append(f"⚠  {zero_rev}/{total} entries have reviews=0 — "
                         f"check if scrape files contain a '## Reviews for this item' section")
-    if high_vel:
-        warnings.append(f"🔥 {high_vel} listings above 20 reviews/month (high velocity)")
-    if low_vel > total * 0.5:
-        warnings.append(f"⚠  More than half of listings are below 2 reviews/month "
-                        f"(possible legacy/oversaturated niche)")
     if shirts == 0:
         warnings.append(f"⚠  No shirt listings found (is_shirt=true for 0 entries) — "
                         f"check that SHIRT_KEYWORDS match title patterns in this niche")
@@ -827,17 +835,18 @@ def self_check(entries):
         warnings.append(f"⚠  Only {shirts}/{total} listings detected as shirts — "
                         f"verify SHIRT_KEYWORDS cover this niche's title patterns")
 
-    # Duplicate image_url check (cross-listing data bleed)
+    # Duplicate first image check (cross-listing data bleed)
     url_to_shops = {}
     for e in entries:
-        url = e.get('image_url')
+        urls = e.get('image_urls') or ([e['image_url']] if e.get('image_url') else [])
+        url = urls[0] if urls else None
         if url:
             url_to_shops.setdefault(url, []).append(e.get('shop_name', e.get('id', '?')))
     dupes = {url: shops for url, shops in url_to_shops.items() if len(shops) > 1}
     if dupes:
         for url, shops in dupes.items():
             warnings.append(
-                f"⚠  Duplicate image_url shared by {len(shops)} shops "
+                f"⚠  Duplicate first image_url shared by {len(shops)} shops "
                 f"({', '.join(shops)}): {url[:80]}…"
             )
 
@@ -912,6 +921,9 @@ def main():
         if len(content) < 200:
             print(f"  skip  {listing_id} (file too small)")
             continue
+        if _is_captcha(content):
+            print(f"  skip  {listing_id} (CAPTCHA detected — re-run research-competitors.py)")
+            continue
 
         creation_date = creation_dates.get(listing_id)
         structured    = parse_structured(content, listing_id, creation_date)
@@ -942,10 +954,9 @@ def main():
             'url':                        structured['url'],
             'title':                      structured['title'],
             'price':                      structured['price'],
-            'price_min':                  structured['price_min'],
             'reviews':                    structured['reviews'],
             'rating':                     structured['rating'],
-            'sales':                      structured['sales'],
+            'shop_sales':                 structured['shop_sales'],
             'product_type':               rule_based.get('product_type'),
             'is_shirt':                   rule_based.get('is_shirt', False),
             'blank':                      rule_based.get('blank'),
@@ -967,16 +978,16 @@ def main():
             'has_sale':                   structured['has_sale'],
             'notes':                      rule_based.get('notes'),
             'image_url':                  structured['image_url'],
+            'image_urls':                 structured['image_urls'],
+            'description':                structured['description'],
+            'sale_percent':               structured['sale_percent'],
+            'sale_type':                  structured['sale_type'],
             'badge':                      structured['badge'],
             'is_bestseller':              structured['is_bestseller'],
             'in_carts':                   structured['in_carts'],
-            'ai_buyer_summary':           structured['ai_buyer_summary'],
             'demand_signals':             structured['demand_signals'],
             'favorites_count':            structured['favorites_count'],
             'most_recent_review_date':    structured['most_recent_review_date'],
-            'oldest_visible_review_date': structured['oldest_visible_review_date'],
-            'reviews_per_month':          structured['reviews_per_month'],
-            'estimated_monthly_sales':    structured['estimated_monthly_sales'],
             'favorites_per_review':       structured['favorites_per_review'],
             # Pricing fields (always re-parsed — structured/calculated, not rule-based)
             'price_max':                  structured['price_max'],

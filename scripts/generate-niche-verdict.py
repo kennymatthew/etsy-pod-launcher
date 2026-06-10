@@ -46,11 +46,11 @@ def load_keywords_trend(niche):
     return 'Unknown (no trend column found in keywords.md)'
 
 
-def classify_demand(top_ems, trend):
-    """Derive demand signal level and trend adjustment note."""
-    if top_ems >= 100:
+def classify_demand(top_reviews, trend):
+    """Derive demand signal level and trend adjustment note based on total review count of top listing."""
+    if top_reviews >= 500:
         level = 'High'
-    elif top_ems >= 30:
+    elif top_reviews >= 100:
         level = 'Medium'
     else:
         level = 'Low'
@@ -78,14 +78,14 @@ def classify_demand(top_ems, trend):
 
 
 def classify_competition(entries):
-    """High barrier if majority of listings have RPM > 10."""
+    """High barrier if majority of listings have reviews > 100."""
     shirts = [e for e in entries if e.get('is_shirt')]
     if not shirts:
         shirts = entries
-    high_velocity = sum(1 for e in shirts if (e.get('reviews_per_month') or 0) > 10)
-    pct = high_velocity / len(shirts) * 100 if shirts else 0
+    high_reviews = sum(1 for e in shirts if (e.get('reviews') or 0) > 100)
+    pct = high_reviews / len(shirts) * 100 if shirts else 0
     level = 'High' if pct >= 50 else ('Medium' if pct >= 25 else 'Low')
-    return level, high_velocity, len(shirts), round(pct, 1)
+    return level, high_reviews, len(shirts), round(pct, 1)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -135,7 +135,7 @@ def compute_price_table(entries):
         nb = norm_blank(e.get('blank'))
         npt = norm_product_type(e.get('product_type'))
         pm = (e.get('print_method') or 'unknown').lower()
-        price = e.get('price_min')
+        price = e.get('price_real_min')
         if price is not None:
             groups[(npt, nb, pm)].append(price)
 
@@ -190,6 +190,55 @@ def compute_blank_distribution(entries):
     return rows
 
 
+def compute_personalization_breakdown(entries):
+    """
+    Break down personalization fields across all entries.
+    Returns:
+      - total_personalized: int
+      - total_not_personalized: int
+      - not_personalized_examples: list of {id, title}
+      - type_counts: list of {type, count} sorted desc (null → 'Not personalized')
+      - photo_required: int (personalization_type contains 'photo')
+      - name_only: int (personalization=True but no 'photo' in type)
+    """
+    total = len(entries)
+    personalized = [e for e in entries if e.get('personalization')]
+    not_personalized = [e for e in entries if not e.get('personalization')]
+
+    from collections import Counter
+    type_counter = Counter()
+    for e in entries:
+        pt = e.get('personalization_type') if e.get('personalization') else None
+        type_counter[pt] += 1
+
+    type_counts = [
+        {'type': t if t is not None else '(none — not personalized)', 'count': c}
+        for t, c in type_counter.most_common()
+    ]
+
+    photo_required = sum(
+        1 for e in personalized
+        if e.get('personalization_type') and 'photo' in e.get('personalization_type', '').lower()
+    )
+    name_only = sum(
+        1 for e in personalized
+        if e.get('personalization_type') and 'photo' not in e.get('personalization_type', '').lower()
+    )
+
+    return {
+        'total': total,
+        'total_personalized': len(personalized),
+        'total_not_personalized': len(not_personalized),
+        'not_personalized_examples': [
+            {'id': e.get('id'), 'title': (e.get('title') or '')[:70]}
+            for e in not_personalized
+        ],
+        'type_counts': type_counts,
+        'photo_required': photo_required,
+        'name_only': name_only,
+    }
+
+
 def compute_fpr_stats(entries):
     """
     For is_shirt=True entries with favorites_per_review > 0:
@@ -210,25 +259,25 @@ def compute_fpr_stats(entries):
     }
 
 
-def compute_rpm_percentiles(entries):
+def compute_reviews_percentiles(entries):
     """
-    For is_shirt=True entries with reviews_per_month not null.
+    For is_shirt=True entries with reviews not null.
     Compute p25, p50, p75, p90 and bucket counts.
     """
     shirts = [e for e in entries if e.get('is_shirt')]
-    rpm_values = sorted(
-        e.get('reviews_per_month')
+    reviews_values = sorted(
+        e.get('reviews')
         for e in shirts
-        if e.get('reviews_per_month') is not None
+        if e.get('reviews') is not None
     )
-    n = len(rpm_values)
+    n = len(reviews_values)
     if n < 4:
         return {'count': n, 'error': 'Too few data points for percentiles'}
 
-    p25 = round(statistics.quantiles(rpm_values, n=4)[0], 2)
-    p50 = round(statistics.median(rpm_values), 2)
-    p75 = round(statistics.quantiles(rpm_values, n=4)[2], 2)
-    p90 = round(statistics.quantiles(rpm_values, n=10)[8], 2)
+    p25 = round(statistics.quantiles(reviews_values, n=4)[0], 2)
+    p50 = round(statistics.median(reviews_values), 2)
+    p75 = round(statistics.quantiles(reviews_values, n=4)[2], 2)
+    p90 = round(statistics.quantiles(reviews_values, n=10)[8], 2)
 
     return {
         'count': n,
@@ -236,27 +285,27 @@ def compute_rpm_percentiles(entries):
         'p50': p50,
         'p75': p75,
         'p90': p90,
-        'rpm_gt_20': sum(1 for r in rpm_values if r > 20),
-        'rpm_gt_10': sum(1 for r in rpm_values if r > 10),
-        'rpm_gt_2': sum(1 for r in rpm_values if r > 2),
-        'rpm_lt_2': sum(1 for r in rpm_values if r < 2),
+        'reviews_gt_500': sum(1 for r in reviews_values if r > 500),
+        'reviews_gt_100': sum(1 for r in reviews_values if r > 100),
+        'reviews_gt_20': sum(1 for r in reviews_values if r > 20),
+        'reviews_lt_20': sum(1 for r in reviews_values if r < 20),
     }
 
 
 def compute_top_n_reference(entries, n=10):
-    """Top N listings by EMS — structured reference for AI writing design patterns."""
-    sorted_entries = sorted(entries, key=lambda e: e.get('estimated_monthly_sales') or 0, reverse=True)
+    """Top N listings by reviews — structured reference for AI writing design patterns."""
+    sorted_entries = sorted(entries, key=lambda e: e.get('reviews') or 0, reverse=True)
     result = []
     for rank, e in enumerate(sorted_entries[:n], 1):
         result.append({
             'rank': rank,
             'id': e.get('id'),
             'title': e.get('title') or '',
-            'ems': e.get('estimated_monthly_sales') or 0,
+            'reviews': e.get('reviews') or 0,
             'blank': norm_blank(e.get('blank')),
             'print_method': e.get('print_method') or 'unknown',
             'confirmed': e.get('print_method_confirmed', False),
-            'price_min': e.get('price_min'),
+            'price_real_min': e.get('price_real_min'),
         })
     return result
 
@@ -289,38 +338,33 @@ def main():
     total = len(entries)
     shirt_count = len(shirts)
 
-    # Sort by EMS descending
-    sorted_entries = sorted(entries, key=lambda e: e.get('estimated_monthly_sales') or 0, reverse=True)
+    # Sort by reviews descending
+    sorted_entries = sorted(entries, key=lambda e: e.get('reviews') or 0, reverse=True)
     top5 = sorted_entries[:5]
 
-    top_ems = top5[0].get('estimated_monthly_sales') or 0 if top5 else 0
-    demand_level, trend_note = classify_demand(top_ems, trend)
-    comp_level, high_vel_count, shirt_n, high_vel_pct = classify_competition(entries)
+    top_reviews = top5[0].get('reviews') or 0 if top5 else 0
+    demand_level, trend_note = classify_demand(top_reviews, trend)
+    comp_level, high_reviews_count, shirt_n, high_reviews_pct = classify_competition(entries)
 
-    # 15/month check
-    top5_ems_values = [(e.get('id', '?'), e.get('title', '')[:50], e.get('estimated_monthly_sales') or 0) for e in top5]
-    top5_pass = sum(1 for _, _, ems in top5_ems_values if ems >= 15)
-    fifteen_check = 'Pass' if top5_pass >= 3 else 'Fail'
+    # Proof of demand check
+    top5_reviews_values = [(e.get('id', '?'), e.get('title', '')[:50], e.get('reviews') or 0) for e in top5]
+    top5_pass = sum(1 for _, _, reviews in top5_reviews_values if reviews >= 20)
+    reviews_check = 'Pass' if top5_pass >= 3 else 'Fail'
 
     # Demand signals
     bestseller_count = sum(1 for e in entries if e.get('is_bestseller'))
     in_carts_count = sum(1 for e in entries if (e.get('in_carts') or 0) > 0)
     high_demand_count = sum(1 for e in entries if any('high demand' in s.lower() for s in (e.get('demand_signals') or [])))
 
-    # RPM stats
-    all_rpm = [e.get('reviews_per_month') or 0 for e in entries]
-    legacy_count = sum(1 for r in all_rpm if r < 2)
-    high_rpm_count = sum(1 for r in all_rpm if r > 20)
-
     # Recommendation
-    if demand_level == 'High' and fifteen_check == 'Pass':
+    if demand_level == 'High' and reviews_check == 'Pass':
         if comp_level == 'High':
             recommendation = 'Enter with sub-niche pivot'
         else:
             recommendation = 'Enter'
-    elif demand_level == 'Medium' and fifteen_check == 'Pass':
+    elif demand_level == 'Medium' and reviews_check == 'Pass':
         recommendation = 'Enter'
-    elif demand_level == 'Low' or fifteen_check == 'Fail':
+    elif demand_level == 'Low' or reviews_check == 'Fail':
         recommendation = 'Do not enter'
     else:
         recommendation = 'Enter with sub-niche pivot'
@@ -336,22 +380,22 @@ def main():
     lines.append('## Niche Verdict [REQUIRED]')
     lines.append('')
     lines.append(f'**Demand signal:** {demand_level}{trend_note}')
-    lines.append(f'Basis: Top listing EMS={top_ems}. Bestseller badges: {bestseller_count}/{total}. '
+    lines.append(f'Basis: Top listing reviews={top_reviews}. Bestseller badges: {bestseller_count}/{total}. '
                  f'In-carts signals: {in_carts_count}. In-high-demand signals: {high_demand_count}. '
                  f'Trend: {trend}. '
                  f'[FILL IN: one-sentence summary of what this means for entry viability]')
     lines.append('')
     lines.append(f'**Competition barrier:** {comp_level}')
-    lines.append(f'Basis: {high_vel_count}/{shirt_n} shirt listings ({high_vel_pct}%) have RPM > 10 '
-                 f'(majority threshold = 50%). {legacy_count}/{total} listings are legacy (RPM < 2). '
+    lines.append(f'Basis: {high_reviews_count}/{shirt_n} shirt listings ({high_reviews_pct}%) have reviews > 100 '
+                 f'(majority threshold = 50%). '
                  f'[FILL IN: one-sentence judgment on barrier to entry]')
     lines.append('')
-    lines.append(f'**15/month check:** {fifteen_check}')
-    lines.append('Basis: Top 5 listings by estimated monthly sales:')
-    for i, (lid, title, ems) in enumerate(top5_ems_values, 1):
-        flag = ' ✓' if ems >= 15 else ' ✗'
-        lines.append(f'  {i}. ID {lid} — "{title}..." — EMS {ems}{flag}')
-    lines.append(f'  {top5_pass}/5 meet the 15/month threshold → {fifteen_check}')
+    lines.append(f'**Proof of demand:** {reviews_check}')
+    lines.append('Basis: Top 5 listings by reviews:')
+    for i, (lid, title, reviews) in enumerate(top5_reviews_values, 1):
+        flag = ' ✓' if reviews >= 20 else ' ✗'
+        lines.append(f'  {i}. ID {lid} — "{title}..." — reviews {reviews}{flag}')
+    lines.append(f'  {top5_pass}/5 meet the reviews >= 20 threshold → {reviews_check}')
     lines.append('')
     lines.append(f'**Recommendation:** {recommendation}')
     lines.append('[FILL IN: one sentence combining demand + competition + 15-check signals]')
@@ -363,7 +407,6 @@ def main():
     lines.append('---')
     lines.append('')
     lines.append(f'_Generated by generate-niche-verdict.py on {date.today()} from {total} scraped listings ({shirt_count} shirts)._')
-    lines.append(f'_High-velocity listings (RPM > 20): {high_rpm_count}. Legacy listings (RPM < 2): {legacy_count}._')
 
     print('\n'.join(lines))
     print()
@@ -374,12 +417,12 @@ def main():
     # ── Top 10 Reference ─────────────────────────────────────────────────────
     print(section_header('Top 10 Reference', 'use when writing Section 1 (Design Patterns) — ensure every listing here appears under a pattern'))
     top10 = compute_top_n_reference(entries, n=10)
-    print(f'{"#":<4} {"ID":<14} {"EMS":>6}  {"Blank":<20} {"Print":<12} {"Confirmed":<10} {"Price Min":>10}')
+    print(f'{"#":<4} {"ID":<14} {"Reviews":>8}  {"Blank":<20} {"Print":<12} {"Confirmed":<10} {"Price Min":>10}')
     print('-' * 80)
     for r in top10:
         conf = 'yes' if r['confirmed'] else 'inferred'
-        price = f"${r['price_min']:.2f}" if r['price_min'] else 'N/A'
-        print(f"{r['rank']:<4} {str(r['id']):<14} {r['ems']:>6}  {r['blank']:<20} {r['print_method']:<12} {conf:<10} {price:>10}")
+        price = f"${r['price_real_min']:.2f}" if r['price_real_min'] else 'N/A'
+        print(f"{r['rank']:<4} {str(r['id']):<14} {r['reviews']:>8}  {r['blank']:<20} {r['print_method']:<12} {conf:<10} {price:>10}")
         print(f"     {r['title'][:90]}")
         print()
     print('[AI instruction: every ID above must appear in a named pattern below. If a listing fits no existing pattern, add a new one.]')
@@ -422,6 +465,31 @@ def main():
     print()
     print('[FILL IN: one sentence on blank dominance and what it means for sourcing]')
 
+    # ── Personalization Breakdown ─────────────────────────────────────────────
+    print(section_header('Personalization Breakdown', 'paste into market-insights.md Section 2 (Most Common Personalization Types)'))
+    pb = compute_personalization_breakdown(entries)
+    print(f'Total listings: {pb["total"]}')
+    print(f'Personalized (personalization=True): {pb["total_personalized"]}/{pb["total"]}')
+    print(f'Not personalized (personalization=False): {pb["total_not_personalized"]}/{pb["total"]}')
+    print()
+    print('**Personalization type breakdown** (from personalization_type field in competitors.json):')
+    print()
+    print('| Personalization Type | Count |')
+    print('|---|---|')
+    for row in pb['type_counts']:
+        print(f"| {row['type']} | {row['count']} |")
+    print()
+    print(f'Of the {pb["total_personalized"]} personalized listings:')
+    print(f'  - Photo required (type contains "photo"): {pb["photo_required"]}')
+    print(f'  - Name/breed only (no photo): {pb["name_only"]}')
+    print()
+    print('Non-personalized listings (no custom input required):')
+    for ex in pb['not_personalized_examples']:
+        print(f'  - ID {ex["id"]}: {ex["title"]}')
+    print()
+    print('[FILL IN: one sentence on what personalization tier dominates and what it means for your product strategy]')
+    print('[FILL IN: one sentence on whether name-only or photo-required listings have higher EMS in this niche]')
+
     # ── FPR Stats ─────────────────────────────────────────────────────────────
     print(section_header('FPR Stats', 'paste into market-insights.md Section 5 / Section 8'))
     fpr = compute_fpr_stats(entries)
@@ -437,29 +505,29 @@ def main():
     print()
     print('[FILL IN: one sentence on what the top FPR listings have in common]')
 
-    # ── RPM Percentiles ───────────────────────────────────────────────────────
-    print(section_header('RPM Percentiles', 'paste into market-insights.md Section 6 / Appendix'))
-    rpm = compute_rpm_percentiles(entries)
-    if 'error' in rpm:
-        print(f'ERROR: {rpm["error"]}')
+    # ── Reviews Percentiles ───────────────────────────────────────────────────
+    print(section_header('Reviews Percentiles', 'paste into market-insights.md Section 6 / Appendix'))
+    rev_pct = compute_reviews_percentiles(entries)
+    if 'error' in rev_pct:
+        print(f'ERROR: {rev_pct["error"]}')
     else:
-        print(f'Shirt listings with RPM data: {rpm["count"]}')
+        print(f'Shirt listings with reviews data: {rev_pct["count"]}')
         print()
-        print('| Percentile | RPM value |')
+        print('| Percentile | Reviews value |')
         print('|---|---|')
-        print(f'| p25 | {rpm["p25"]} |')
-        print(f'| p50 (median) | {rpm["p50"]} |')
-        print(f'| p75 | {rpm["p75"]} |')
-        print(f'| p90 | {rpm["p90"]} |')
+        print(f'| p25 | {rev_pct["p25"]} |')
+        print(f'| p50 (median) | {rev_pct["p50"]} |')
+        print(f'| p75 | {rev_pct["p75"]} |')
+        print(f'| p90 | {rev_pct["p90"]} |')
         print()
         print('| Bucket | Count |')
         print('|---|---|')
-        print(f'| RPM > 20 (high velocity) | {rpm["rpm_gt_20"]} |')
-        print(f'| RPM > 10 | {rpm["rpm_gt_10"]} |')
-        print(f'| RPM > 2 | {rpm["rpm_gt_2"]} |')
-        print(f'| RPM < 2 (legacy) | {rpm["rpm_lt_2"]} |')
+        print(f'| reviews > 500 (high social proof) | {rev_pct["reviews_gt_500"]} |')
+        print(f'| reviews > 100 | {rev_pct["reviews_gt_100"]} |')
+        print(f'| reviews > 20 | {rev_pct["reviews_gt_20"]} |')
+        print(f'| reviews < 20 (low proof) | {rev_pct["reviews_lt_20"]} |')
         print()
-        print('[FILL IN: one sentence on what RPM distribution means for competitive intensity]')
+        print('[FILL IN: one sentence on what reviews distribution means for competitive intensity]')
 
 
 if __name__ == '__main__':

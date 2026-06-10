@@ -7,7 +7,7 @@ Derives shop-level monthly sales estimates from three signals:
 
   Method 1 — total_sales ÷ months_active        (lifetime average, from shop page)
   Method 2 — rate-based projection × 7          (current momentum, from /reviews pages)
-  Method 3 — sum of listing estimated_monthly_sales from competitors.json (bottom-up, lower bound)
+  Method 3 — sum of listing reviews from competitors.json (demand proxy, not sales estimate)
 
 M2 scrapes /reviews pages dynamically until the oldest review is 5 months old (150 days),
 up to a max of 20 pages. This smooths out seasonal spikes (e.g. Father's Day, Christmas).
@@ -16,7 +16,7 @@ Counts ALL review date occurrences (not unique) so multiple reviews per day are 
 Playwright is blocked by Etsy — Firecrawl is used for all scraping (has anti-bot measures).
 
 Usage:
-  # Auto-detect top N shops from competitors.json (default: top 8 by estimated_monthly_sales)
+  # Auto-detect top N shops from competitors.json (default: top 8 by sum of listing reviews)
   python3 scripts/research-shops.py --niche personalized-gift-for-dad
 
   # Specific shops only
@@ -346,9 +346,9 @@ def build_listing_rollups(competitors_path):
     rollup = {}
     for item in data:
         shop = item.get('shop_name', '').strip()
-        sales = item.get('estimated_monthly_sales') or 0
+        rev_sum = item.get('reviews') or 0
         if shop:
-            rollup[shop] = rollup.get(shop, 0) + sales
+            rollup[shop] = rollup.get(shop, 0) + rev_sum
     return rollup
 
 
@@ -361,9 +361,9 @@ def top_shops_from_competitors(competitors_path, top_n):
     best = {}
     for item in data:
         shop = item.get('shop_name', '').strip()
-        sales = item.get('estimated_monthly_sales') or 0
+        rev_sum = item.get('reviews') or 0
         if shop:
-            best[shop] = max(best.get(shop, 0), sales)
+            best[shop] = best.get(shop, 0) + rev_sum
     ranked = sorted(best.items(), key=lambda x: -x[1])
     return [s for s, _ in ranked[:top_n]]
 
@@ -465,7 +465,7 @@ def main():
 
     out_path.write_text(json.dumps(watchlist, indent=2))
     print(f"\n✓ Saved → {out_path}")
-    print(f"  {len(watchlist)} shops · sorted by estimated monthly sales")
+    print(f"  {len(watchlist)} shops · sorted by estimated monthly sales (shop-level)")
 
     # Summary table
     print()

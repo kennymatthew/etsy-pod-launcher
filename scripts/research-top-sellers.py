@@ -10,7 +10,7 @@ Usage:
 
 Stability note: Alura could restructure this page at any time.
 If the scrape returns minimal content, fall back to the in-house
-estimate from competitors.json (estimated_monthly_sales field).
+estimate from competitors.json (reviews field).
 """
 
 import subprocess, json, re, argparse, os, shutil, sys
@@ -76,7 +76,7 @@ def main():
     if not raw_path.exists() or raw_path.stat().st_size < 500:
         print("✗ Scrape returned minimal content.")
         print("  Alura may have changed their page layout.")
-        print("  Fall back to in-house estimate: competitors.json → estimated_monthly_sales")
+        print("  Fall back to in-house estimate: competitors.json → reviews")
         return 1
 
     content = raw_path.read_text()
@@ -88,7 +88,7 @@ def main():
     if not has_data:
         print(f"⚠  Scraped {size_kb}KB but no sales figures found — page may have changed.")
         print(f"   Raw file saved for manual inspection: {raw_path}")
-        print("   Fall back to in-house estimate: competitors.json → estimated_monthly_sales")
+        print("   Fall back to in-house estimate: competitors.json → reviews")
         return 1
 
     print(f"✓ Scraped {size_kb}KB — sales data present")

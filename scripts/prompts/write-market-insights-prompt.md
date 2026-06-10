@@ -41,6 +41,18 @@ The HTML renderer converts backtick-wrapped tags to color-coded dots. Without ba
 | inferred | `` `[inferred]` `` | Logical conclusion drawn FROM our data — not directly observed |
 | market knowledge | `` `[market knowledge]` `` | General POD/Etsy knowledge from AI training data — not verified for this niche |
 
+### Critical rule — no self-calculated counts
+
+**NEVER recalculate a number from competitors.json yourself.** AI arithmetic on raw JSON is unreliable and has caused hallucinated claims tagged `[our data]` in past audits.
+
+- Run `generate-niche-verdict.py --niche <niche>` first. It outputs pre-computed blocks for: Niche Verdict, Personalization Types, Price Table, Print Methods, Blank Distribution, FPR Stats, RPM Percentiles, Top 10 Reference.
+- Paste each pre-computed block verbatim into the matching section. Do not change any number in a pre-computed block.
+- `[FILL IN]` placeholder sentences are the only lines you write yourself. These are interpretation only — they must be tagged `[inferred]` or `[market knowledge]`, **never `[our data]`**.
+
+If a section has no pre-computed block and requires a count, write `[FILL IN — run generate-niche-verdict.py to get this number]` and do not guess.
+
+---
+
 ### Rules
 
 1. **Every sentence gets a tag** — not just section headers or paragraph endings. Each individual claim on its own line or in its own sentence must be tagged.
@@ -114,6 +126,7 @@ Run `generate-competitor-report.py --niche <niche>` first to populate the tables
 4. Confirm no sentence in sections 1–12 is untagged (headers and listing ID lines are exempt)
 5. Confirm no hybrid tags exist (`[our data + inferred]`, `[our data / inferred]`, etc.)
 6. Confirm the Niche Verdict section is at the top and every field is filled (no `[FILL IN]` remaining)
+7. **For every sentence tagged `[our data]`: confirm it came verbatim from a generate-niche-verdict.py output block — not a number you calculated yourself.** Any self-calculated count must be `[inferred]`, not `[our data]`.
 
 Only save the file after all 6 checks pass. Flag any failure explicitly before saving.
 

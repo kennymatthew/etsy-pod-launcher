@@ -47,6 +47,17 @@ def load_env():
 
 ENV = load_env()
 
+CAPTCHA_SIGNALS = [
+    'verify you', 'are you human', 'robot check', 'access denied',
+    'captcha', 'unusual traffic', "this page isn't", 'security check',
+    'please enable cookies', 'cf-browser-verification',
+]
+
+def _is_captcha(content):
+    low = content[:3000].lower()
+    return any(sig in low for sig in CAPTCHA_SIGNALS)
+
+
 def fetch_creation_dates(listing_ids, api_key):
     """
     Fetch original_creation_timestamp for each listing from Etsy API v3.
@@ -163,14 +174,50 @@ def scrape_listing_with_scroll(url, output, api_key):
     return False
 
 
+def _clean_scrape(output_path):
+    """
+    Post-process a saved listing scrape in-place:
+    1. Extract listed_date and favorites (they appear after the truncation point)
+    2. Strip il_75x75 thumbnail lines
+    3. Truncate at ## More from this shop
+    4. Re-inject extracted listed_date and favorites above the cut
+    """
+    try:
+        content = output_path.read_text(encoding='utf-8', errors='replace')
+    except Exception:
+        return
+
+    m_date = re.search(r'Listed on ([A-Za-z]+ \d+, \d+)', content)
+    m_fav  = re.search(r'\[([\d,]+(?:\.\d+)?k?)\s+favorites?\]\([^)]+\)', content, re.IGNORECASE)
+
+    lines = [l for l in content.splitlines() if 'il_75x75' not in l]
+    content = '\n'.join(lines)
+
+    trunc = re.search(r'^##\s+More from this shop', content, re.MULTILINE | re.IGNORECASE)
+    if trunc:
+        content = content[:trunc.start()].rstrip()
+        if m_date and m_date.group(1) not in content:
+            content += f'\n\nListed on {m_date.group(1)}'
+        if m_fav and m_fav.group(0) not in content:
+            content += f'\n\n{m_fav.group(0)}'
+
+    output_path.write_text(content, encoding='utf-8')
+
+
 def scrape_one_listing(args):
     url, idx, scrapes_dir, api_key = args
     listing_id = re.search(r'/listing/(\d+)/', url).group(1)
     output = scrapes_dir / f'etsy-listing-{listing_id}.md'
 
     if output.exists() and output.stat().st_size > 500:
-        print(f"  [{idx+1}] cached   — {listing_id}")
-        return url, str(output), True
+        cached_content = output.read_text()
+        if _is_captcha(cached_content):
+            output.unlink()
+            print(f"  [{idx+1}] ✗ cached  — {listing_id} (CAPTCHA detected in cache, re-scraping)")
+        else:
+            print(f"  [{idx+1}] cached   — {listing_id}")
+            _clean_scrape(output)
+            return url, str(output), True
 
     print(f"  [{idx+1}] scraping — {listing_id} ...")
     result = subprocess.run(
@@ -184,6 +231,11 @@ def scrape_one_listing(args):
         return url, None, False
 
     content = output.read_text()
+    if _is_captcha(content):
+        output.unlink()
+        print(f"  [{idx+1}] ✗         — {listing_id} (CAPTCHA blocked)")
+        return url, None, False
+
     if 'this item is unavailable' in content[:500].lower():
         output.unlink()
         print(f"  [{idx+1}] ✗         — {listing_id} (unavailable)")
@@ -202,6 +254,7 @@ def scrape_one_listing(args):
     else:
         print(f"  [{idx+1}] ✓         — {listing_id}")
 
+    _clean_scrape(output)
     return url, str(output), True
 
 def main():
@@ -227,6 +280,9 @@ def main():
         print("  ✗ No listing URLs found. Check your API key or try a different query.")
         return 1
 
+    if len(listing_urls) < 20:
+        print(f"  ⚠ Only {len(listing_urls)} listings found — query may be too narrow or search page was blocked")
+
     if args.count:
         listing_urls = listing_urls[:args.count]
         print(f"  Limiting to {args.count} listings (--count flag)")
@@ -245,6 +301,19 @@ def main():
 
     raw_results.sort(key=lambda r: listing_urls.index(r[0]) if r[0] in listing_urls else 99)
     scraped = [(url, path) for url, path, ok in raw_results if ok and path]
+    failed_urls = [url for url, path, ok in raw_results if not ok or not path]
+
+    # Review section coverage
+    with_reviews = sum(1 for _, path in scraped if '## Reviews for this item' in Path(path).read_text())
+    print(f"  Reviews section present: {with_reviews}/{len(scraped)} listings", end="")
+    if with_reviews < len(scraped) * 0.7:
+        print(f"  ⚠ Low coverage — re-run with FIRECRAWL_API_KEY set for scroll retry")
+    else:
+        print()
+
+    if failed_urls:
+        failed_ids = [re.search(r'/listing/(\d+)/', u).group(1) for u in failed_urls]
+        print(f"  ⚠ {len(failed_urls)} listing(s) failed: {', '.join(failed_ids)}")
 
     # Step 3: fetch listing creation dates from Etsy API
     scraped_ids = [re.search(r'/listing/(\d+)/', u).group(1) for u, _ in scraped]
@@ -262,6 +331,8 @@ def main():
         "scraped_date": datetime.date.today().isoformat(),
         "listing_urls": listing_urls,
         "scraped_files": [{"url": u, "file": p} for u, p in scraped],
+        "failed_urls": failed_urls,
+        "reviews_coverage": f"{with_reviews}/{len(scraped)}",
         "output_target": str(project_dir / 'competitors.json'),
         "next_step": f"Ask Claude: 'Read projects/{args.niche}/01-research/scrapes/manifest.json and create competitors.json'"
     }

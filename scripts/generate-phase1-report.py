@@ -69,8 +69,8 @@ def load(niche):
 
 def stats(competitors):
     shirts = [c for c in competitors if c.get('is_shirt')]
-    by_ems = sorted(competitors, key=lambda x: x.get('estimated_monthly_sales') or 0, reverse=True)
-    shirt_by_ems = sorted(shirts, key=lambda x: x.get('estimated_monthly_sales') or 0, reverse=True)
+    by_reviews = sorted(competitors, key=lambda x: x.get('reviews') or 0, reverse=True)
+    shirt_by_reviews = sorted(shirts, key=lambda x: x.get('reviews') or 0, reverse=True)
 
     # Prices
     prices = []
@@ -100,18 +100,10 @@ def stats(competitors):
         key=lambda x: x.get('favorites_per_review') or 0, reverse=True
     )
 
-    # Legacy (RPM < 2, reviews > 5 — exclude new listings with no reviews)
-    legacy = [c for c in shirts if
-              (c.get('reviews') or 0) > 5 and
-              (c.get('reviews_per_month') or 0) < 2]
-
-    # High velocity (RPM > 20)
-    high_vel = [c for c in shirts if (c.get('reviews_per_month') or 0) > 20]
-
     # Mockup breakdown for top 5
     top5_mockup = Counter(
         c.get('mockup_style') or 'unknown'
-        for c in shirt_by_ems[:5]
+        for c in shirt_by_reviews[:5]
     )
 
     # Breed-specific listings (title or key_phrases contain breed names)
@@ -156,13 +148,11 @@ def stats(competitors):
         'bestseller_count': len(with_bs),
         'in_carts_count': len(with_carts),
         'high_fpr': high_fpr,
-        'legacy': legacy,
-        'high_vel': high_vel,
-        'top5': by_ems[:5],
-        'top5_shirt': shirt_by_ems[:5],
-        'top3_shirt': shirt_by_ems[:3],
-        'by_ems': by_ems,
-        'shirt_by_ems': shirt_by_ems,
+        'top5': by_reviews[:5],
+        'top5_shirt': shirt_by_reviews[:5],
+        'top3_shirt': shirt_by_reviews[:3],
+        'by_reviews': by_reviews,
+        'shirt_by_reviews': shirt_by_reviews,
         'top5_mockup': top5_mockup,
         'breed_listings': breed_listings,
         'treat_dealer': treat_dealer,
@@ -240,17 +230,16 @@ def section_market_snapshot(niche, st, erank):
               for k in kws]
     best_ratio = min((r for r in ratios if r[3] is not None), key=lambda x: x[3], default=None)
 
-    # Top 5 EMS table
+    # Top 5 Reviews table
     top5_rows = ''
     for i, c in enumerate(st['top5'], 1):
         title = (c.get('title') or '')[:55] + '…'
-        ems = c.get('estimated_monthly_sales') or 0
-        rpm = c.get('reviews_per_month') or 0
+        revs = c.get('reviews') or 0
         fpr = c.get('favorites_per_review')
         fpr_str = f'{fpr:.1f}' if fpr is not None else '—'
         bs = '✓' if c.get('is_bestseller') else ''
         blank = c.get('blank') or '—'
-        top5_rows += f'<tr><td>{i}</td><td class="title-cell">{title}</td><td>{ems:,}</td><td>{rpm:.1f}</td><td>{fpr_str}</td><td>{bs}</td><td>{blank[:25]}</td></tr>\n'
+        top5_rows += f'<tr><td>{i}</td><td class="title-cell">{title}</td><td>{revs:,}</td><td>{fpr_str}</td><td>{bs}</td><td>{blank[:25]}</td></tr>\n'
 
     # eRank keywords table
     kw_rows = ''
@@ -324,10 +313,10 @@ def section_market_snapshot(niche, st, erank):
   </div>
   {p("All stat card values computed directly from competitors.json. `[our data]`")}
 
-  <h3>Top 5 Listings by Estimated Monthly Sales</h3>
-  {p("EMS = reviews_per_month × 7 (industry proxy). RPM uses oldest visible review date as listing age anchor — may overstate EMS for high-review listings. `[our data]` FPR = favorites ÷ reviews: above 5.0 signals high save-but-don't-buy rate. `[inferred]`")}
+  <h3>Top 5 Listings by Reviews</h3>
+  {p("Reviews = total verified buyer reviews. FPR = favorites ÷ reviews: above 5.0 signals high save-but-don't-buy rate. [our data]")}
   <table>
-    <thead><tr><th>#</th><th>Title</th><th>EMS</th><th>RPM</th><th>FPR</th><th>Bestseller</th><th>Blank</th></tr></thead>
+    <thead><tr><th>#</th><th>Title</th><th>Reviews</th><th>FPR</th><th>Bestseller</th><th>Blank</th></tr></thead>
     <tbody>{top5_rows}</tbody>
   </table>
 
@@ -364,11 +353,10 @@ def section_who_is_winning(st, shops):
     formula_items = ''
     for c in top3:
         title = (c.get('title') or '')[:70]
-        ems = c.get('estimated_monthly_sales') or 0
         revs = c.get('reviews') or 0
         favs = c.get('favorites_count') or 0
         blank = c.get('blank') or 'not stated'
-        formula_items += f'<li><strong>{title}…</strong> — EMS {ems:,} · {revs:,} reviews · {favs:,} favorites · blank: {blank}</li>\n'
+        formula_items += f'<li><strong>{title}…</strong> — {revs:,} reviews · {favs:,} favorites · blank: {blank}</li>\n'
 
     return f'''
 <section id="winners">
@@ -382,7 +370,7 @@ def section_who_is_winning(st, shops):
   </table>
 
   <h3>The Dominant Formula</h3>
-  {p("The top 3 shirt listings by EMS all share the same format. `[our data]`")}
+  {p("The top 3 shirt listings by reviews all share the same format. `[our data]`")}
   <ul>{formula_items}</ul>
   {p("Common pattern: custom photo + dog name on a Comfort Colors garment-dyed blank, presented in a bootleg/vintage graphic tee layout with multiple color options. `[inferred]`")}
   {p("Why this formula dominates: high personalization = each buyer gets a unique item, reducing price sensitivity. Comfort Colors commands a premium aesthetic. The bootleg tee template is well-established in the dog niche. `[inferred]`")}
@@ -396,19 +384,17 @@ def section_gaps(st):
     for c in st['high_fpr'][:8]:
         title = (c.get('title') or '')[:60] + '…'
         fpr = c.get('favorites_per_review') or 0
-        ems = c.get('estimated_monthly_sales') or 0
         revs = c.get('reviews') or 0
         favs = c.get('favorites_count') or 0
         kp = ', '.join((c.get('key_phrases') or [])[:3])
-        fpr_rows += f'<tr><td class="title-cell">{title}</td><td><strong>{fpr:.1f}</strong></td><td>{ems}</td><td>{revs}</td><td>{favs:,}</td><td>{kp}</td></tr>\n'
+        fpr_rows += f'<tr><td class="title-cell">{title}</td><td><strong>{fpr:.1f}</strong></td><td>{revs:,}</td><td>{favs:,}</td><td>{kp}</td></tr>\n'
 
     # Breed listings summary
-    breed_ems = [c.get('estimated_monthly_sales') or 0 for c in st['breed_listings']]
     breed_fpr = [c.get('favorites_per_review') or 0
                  for c in st['breed_listings'] if c.get('favorites_per_review')]
     avg_breed_fpr = round(statistics.mean(breed_fpr), 1) if breed_fpr else '—'
     avg_generic_fpr_vals = [c.get('favorites_per_review') or 0
-                            for c in st['shirt_by_ems'][:3] if c.get('favorites_per_review')]
+                            for c in st['shirt_by_reviews'][:3] if c.get('favorites_per_review')]
     avg_generic_fpr = round(statistics.mean(avg_generic_fpr_vals), 1) if avg_generic_fpr_vals else '—'
 
     return f'''
@@ -421,7 +407,7 @@ def section_gaps(st):
   {p("FPR = favorites ÷ reviews. Above 5.0 means: many shoppers saved the listing, but relatively few bought. `[inferred]` This can signal: (a) unmet demand in a sub-niche where the existing listing isn't quite right, or (b) price/trust friction on a newer listing. `[market knowledge]`")}
   {p(f"There are {len(st['high_fpr'])} listings with FPR above 5.0. `[our data]`")}
   <table>
-    <thead><tr><th>Title</th><th>FPR</th><th>EMS</th><th>Reviews</th><th>Favorites</th><th>Key phrases</th></tr></thead>
+    <thead><tr><th>Title</th><th>FPR</th><th>Reviews</th><th>Favorites</th><th>Key phrases</th></tr></thead>
     <tbody>{fpr_rows if fpr_rows else '<tr><td colspan="6">No high-FPR listings found</td></tr>'}</tbody>
   </table>
 
@@ -439,7 +425,7 @@ def section_directions(st, erank):
 
     # Treat dealer listings
     td_listings = st['treat_dealer']
-    td_ems_list = [c.get('estimated_monthly_sales') or 0 for c in td_listings]
+    td_rev_list = [c.get('reviews') or 0 for c in td_listings]
 
     # Dachshund / Corgi specific FPR
     def breed_data(breed_terms):
@@ -456,12 +442,12 @@ def section_directions(st, erank):
 
     def fpr_summary(listings):
         fprs = [c.get('favorites_per_review') or 0 for c in listings if c.get('favorites_per_review')]
-        ems_vals = [c.get('estimated_monthly_sales') or 0 for c in listings]
+        rev_vals = [c.get('reviews') or 0 for c in listings]
         return {
             'count': len(listings),
             'avg_fpr': round(statistics.mean(fprs), 1) if fprs else None,
             'max_fpr': round(max(fprs), 1) if fprs else None,
-            'avg_ems': round(statistics.mean(ems_vals)) if ems_vals else None,
+            'avg_reviews': round(statistics.mean(rev_vals)) if rev_vals else None,
         }
 
     d_data = fpr_summary(dachshund)
@@ -474,12 +460,11 @@ def section_directions(st, erank):
         out = ''
         for c in items[:max_items]:
             fpr = c.get('favorites_per_review')
-            ems = c.get('estimated_monthly_sales') or 0
             revs = c.get('reviews') or 0
             favs = c.get('favorites_count') or 0
             title = (c.get('title') or '')[:65]
             fpr_display = f'{fpr:.1f}' if fpr else '—'
-            out += f'<li><em>{title}…</em> — EMS {ems} · {revs} reviews · {favs:,} favorites · FPR {fpr_display}</li>\n'
+            out += f'<li><em>{title}…</em> — {revs} reviews · {favs:,} favorites · FPR {fpr_display}</li>\n'
         return out
 
     td_evidence = listing_evidence(td_listings)
@@ -524,7 +509,7 @@ def section_directions(st, erank):
         </tr>
         <tr>
           <td>Low review counts on breed listings = low social proof barrier</td>
-          <td>Breed-specific listings in our data have avg EMS {d_data["avg_ems"]} — low, but these are newer/smaller. No single listing dominates breed-specific search.</td>
+          <td>Breed-specific listings in our data have avg {d_data["avg_reviews"]} reviews — low, but these are newer/smaller. No single listing dominates breed-specific search.</td>
           <td><span class="src our-data">[our data]</span></td>
         </tr>
         <tr>
@@ -563,7 +548,7 @@ def section_directions(st, erank):
       <tbody>
         <tr>
           <td>"Treat Dealer" concept already has proven real demand</td>
-          <td>{len(td_listings)} listings in our scrape use this phrase. {f'The strongest has {max((c.get("reviews") or 0) for c in td_listings):,} reviews and {max((c.get("favorites_count") or 0) for c in td_listings):,} favorites — this is a mature, validated concept, not a speculation. EMS values: {", ".join(str(e) for e in td_ems_list)}.' if td_listings else 'No treat dealer listings found in top results — phrase appears in key_phrases only.'}</td>
+          <td>{len(td_listings)} listings in our scrape use this phrase. {f'The strongest has {max((c.get("reviews") or 0) for c in td_listings):,} reviews and {max((c.get("favorites_count") or 0) for c in td_listings):,} favorites — this is a mature, validated concept, not a speculation. Review counts: {", ".join(str(r) for r in td_rev_list)}.' if td_listings else 'No treat dealer listings found in top results — phrase appears in key_phrases only.'}</td>
           <td><span class="src our-data">[our data]</span></td>
         </tr>
         <tr>
@@ -611,7 +596,7 @@ def section_directions(st, erank):
       <tbody>
         <tr>
           <td>Golden Retriever listings exist in our scrape with real EMS</td>
-          <td>{g_data["count"]} golden/goldendoodle listings found. Avg EMS {g_data["avg_ems"]}. Max FPR {g_data["max_fpr"]}.</td>
+          <td>{g_data["count"]} golden/goldendoodle listings found. Avg {g_data["avg_reviews"]} reviews. Max FPR {g_data["max_fpr"]}.</td>
           <td><span class="src our-data">[our data]</span></td>
         </tr>
         <tr>
