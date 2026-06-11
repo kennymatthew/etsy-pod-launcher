@@ -100,30 +100,40 @@ def _extract_interp_slots(section_text):
     return cleaned[:4]
 
 
-def update_demand_signals_in_md(md_text, comp_data, patterns_config):
-    """Rewrite Section 6 tables in market-insights.md from live data.
+def _entrenchment_tier(entry):
+    """Classify a listing's shop as entrenched / mid / accessible.
 
-    Preserves existing interpretation lines; leaves [FILL IN] where none exist.
-    Returns the updated markdown string and also writes the file if path given.
+    Uses shop_sales (available for all entries) as primary signal.
+    shop_years_on_etsy upgrades to 'entrenched' when >= 5 years regardless of sales.
     """
+    sales = entry.get('shop_sales') or 0
+    years = entry.get('shop_years_on_etsy') or 0
+    if sales >= 100_000 or years >= 5:
+        return 'entrenched'
+    elif sales >= 20_000 or years >= 2:
+        return 'mid'
+    else:
+        return 'accessible'
+
+
+def update_demand_signals_in_md(md_text, comp_data, patterns_config):
+    """Rewrite Section 6 in market-insights.md — fully deterministic, no AI fill-in slots."""
     patterns = (patterns_config or {}).get('patterns', [])
     n = len(comp_data)
 
-    # ── Badge counts ─────────────────────────────────────────────────────────
-    badge_counts = {}
-    for e in comp_data:
-        b = e.get('badge') or 'None'
-        badge_counts[b] = badge_counts.get(b, 0) + 1
-
-    bs_count      = badge_counts.get('Bestseller', 0)
-    pick_count    = badge_counts.get("Etsy's Pick", 0)
-    rare_count    = badge_counts.get('Rare find', 0)
+    # ── Badge counts ──────────────────────────────────────────────────────────
+    bs_count      = sum(1 for e in comp_data if e.get('is_bestseller'))
+    pick_count    = sum(1 for e in comp_data if e.get('badge') == "Etsy's Pick")
     in_carts_any  = sum(1 for e in comp_data if (e.get('in_carts') or 0) > 0)
     in_carts_null = sum(1 for e in comp_data if e.get('in_carts') is None)
 
     pick_shops = ', '.join(
-        f"{e.get('shop_name')} ({e.get('reviews') or 0} reviews)"
+        f"{e.get('shop_name')} ({e.get('reviews') or 0:,} reviews)"
         for e in comp_data if e.get('badge') == "Etsy's Pick"
+    )
+    pick_note = (
+        f'Not a lesser signal — {pick_shops} `[our data]`'
+        if pick_count else 'Signal exists on Etsy but did not trigger `[our data]`'
     )
 
     in_demand_listings = [
@@ -135,83 +145,136 @@ def update_demand_signals_in_md(md_text, comp_data, patterns_config):
         for e in in_demand_listings
         if re.search(r'(\d+) people', next((s for s in e['demand_signals'] if 'In demand' in s), ''))
     ) or '—'
+    demand_24h_note = (
+        f'24h snapshot only — not confirmed sustained demand: {in_demand_detail} `[our data]`'
+        if in_demand_listings else 'Signal exists on Etsy but did not trigger `[our data]`'
+    )
+
+    # ── Entrenchment breakdown of bestseller badge holders ────────────────────
+    bs_entries    = [e for e in comp_data if e.get('is_bestseller')]
+    n_entrenched  = sum(1 for e in bs_entries if _entrenchment_tier(e) == 'entrenched')
+    n_mid         = sum(1 for e in bs_entries if _entrenchment_tier(e) == 'mid')
+    n_accessible  = sum(1 for e in bs_entries if _entrenchment_tier(e) == 'accessible')
+    pct_accessible = round(n_accessible / bs_count * 100) if bs_count else 0
+
+    years_known = [e.get('shop_years_on_etsy') for e in bs_entries if e.get('shop_years_on_etsy')]
+    median_years = sorted(years_known)[len(years_known) // 2] if years_known else None
+    years_range  = f'{min(years_known):.0f}–{max(years_known):.0f}' if years_known else 'unknown'
+
+    top_reviews = max((e.get('reviews') or 0) for e in comp_data)
+    high_proof  = sum(1 for e in comp_data if (e.get('reviews') or 0) >= 500)
+
+    # ── Auto-generated verdict (no AI) ───────────────────────────────────────
+    entry_outlook = (
+        'majority accessible to a new entrant'
+        if pct_accessible >= 50
+        else 'market is mid-to-entrenched — expect slower ramp'
+    )
+    v_line = (
+        f'{bs_count}/{n} listings carry a Bestseller badge (sustained 6-month purchase volume); '
+        f'top listing has {top_reviews:,} reviews; {high_proof} listings exceed 500 reviews. `[our data]` '
+        f'{pct_accessible}% of badge-holders are from shops with under 20k total sales or under 5 years on Etsy — {entry_outlook}. `[inferred]`'
+    )
+
+    # ── Entrenchment commentary (no AI) ──────────────────────────────────────
+    b_line = (
+        f'{n_entrenched} of {bs_count} Bestseller listings are from entrenched shops '
+        f'(100k+ sales or 5+ years on Etsy); {n_mid} are mid-tier; {n_accessible} are accessible. `[our data]` '
+        f'Shop age for badge-holders: median {median_years:.0f} years, range {years_range} years. `[our data]`'
+        if years_known else
+        f'{n_entrenched} of {bs_count} Bestseller listings are from entrenched shops '
+        f'(100k+ sales); {n_mid} are mid-tier; {n_accessible} are accessible. `[our data]`'
+    )
 
     # ── In-carts buckets ─────────────────────────────────────────────────────
     b20  = sum(1 for e in comp_data if (e.get('in_carts') or 0) >= 20)
     b11  = sum(1 for e in comp_data if 11 <= (e.get('in_carts') or 0) <= 19)
     b1   = sum(1 for e in comp_data if 1  <= (e.get('in_carts') or 0) <= 10)
     pct_cap = round(b20 / n * 100) if n else 0
+    c_line = f'{pct_cap}% of listings are at the display cap (20+). `[our data]` Cart counts are intent signals — not purchases; abandon rates on Etsy are high. `[market knowledge]`'
 
-    # ── Pattern breakdown ─────────────────────────────────────────────────────
+    # ── Pattern breakdown with Entry Score ───────────────────────────────────
     plabel = {p['id']: p['label'] for p in patterns}
-    porder = {p['id']: p.get('display_rank', 99) for p in patterns}
     groups = {}
     for e in comp_data:
         pid = assign_pattern(e, patterns) if patterns else 'P0'
         groups.setdefault(pid, []).append(e)
 
-    pattern_rows = []
-    for pid, entries in sorted(groups.items(), key=lambda kv: -sum(
-            (e.get('reviews') or 0) for e in kv[1]) / max(len(kv[1]), 1)):
-        pn = len(entries)
-        pbs   = sum(1 for e in entries if e.get('is_bestseller'))
-        pc    = sum(1 for e in entries if (e.get('in_carts') or 0) > 0)
-        pc20  = sum(1 for e in entries if (e.get('in_carts') or 0) >= 20)
-        pavg_reviews = round(sum((e.get('reviews') or 0) for e in entries) / pn)
+    scored = []
+    for pid, entries in groups.items():
+        pn   = len(entries)
+        pbs  = sum(1 for e in entries if e.get('is_bestseller'))
+        pc   = sum(1 for e in entries if (e.get('in_carts') or 0) > 0)
+        pc20 = sum(1 for e in entries if (e.get('in_carts') or 0) >= 20)
+        pavg = round(sum((e.get('reviews') or 0) for e in entries) / pn)
+        bsl_pct = pbs / pn if pn else 0
+        # Entry score: bestseller% / listing_count — higher = more proven demand per competitor
+        score = round(bsl_pct / pn, 4) if pn >= 3 else None  # skip tiny samples
         label = plabel.get(pid, pid)
-        pattern_rows.append(f'| {label} | {pn} | {pbs}/{pn} | {pc}/{pn} | {pc20}/{pn} | {pavg_reviews} |')
+        scored.append((pid, label, pn, pbs, pc, pc20, pavg, bsl_pct, score))
 
-    # ── Find existing interpretation slots ────────────────────────────────────
+    # Sort by avg reviews descending (keeps existing visual order)
+    scored.sort(key=lambda x: -x[6])
+
+    pattern_rows = []
+    for pid, label, pn, pbs, pc, pc20, pavg, bsl_pct, score in scored:
+        if score is None:
+            score_cell = '⚠️ n<3'
+        else:
+            score_cell = f'{score:.3f}'
+        pattern_rows.append(
+            f'| {label} | {pn} | {pbs}/{pn} | {pc}/{pn} | {pc20}/{pn} | {pavg:,} | {score_cell} |'
+        )
+
+    # ── Auto-generated pattern commentary (no AI) ────────────────────────────
+    eligible = [(label, pn, pbs, pavg, score) for _, label, pn, pbs, pc, pc20, pavg, bsl_pct, score in scored if score is not None]
+    if eligible:
+        best_label, best_n, best_bs, best_avg, best_score = max(eligible, key=lambda x: x[4])
+        worst_label, worst_n, worst_bs, worst_avg, worst_score = min(eligible, key=lambda x: x[4])
+        p_line = (
+            f'Best entry pattern: **{best_label}** — {best_n} listings, {best_bs}/{best_n} Bestseller, '
+            f'avg {best_avg:,} reviews, Entry Score {best_score:.3f}. `[our data]` '
+            f'Avoid **{worst_label}** as a first listing — {worst_n} competitors, lowest Entry Score ({worst_score:.3f}). `[inferred]`'
+        )
+    else:
+        p_line = 'Insufficient pattern data to compute Entry Score. `[our data]`'
+
+    # ── Assemble section ──────────────────────────────────────────────────────
     start = md_text.find('\n## 6. Demand Signals Summary')
     if start == -1:
         return md_text
     end_match = re.search(r'\n## [^6\n]', md_text[start + 1:])
     end = start + 1 + end_match.start() if end_match else len(md_text)
-    existing_section = md_text[start:end]
-    slots = _extract_interp_slots(existing_section)
-
-    fill = '[FILL IN]'
-    v_line   = slots[0] or fill + ' one-sentence verdict on overall demand strength. `[our data]`'
-    b_line   = slots[1] or fill + ' 1–2 sentences on what the zero rows mean for this niche. `[inferred]`'
-    c_line   = slots[2] or f'{pct_cap}% of listings are at the display cap. `[our data]`'
-    p_line   = slots[3] or fill + ' 2–3 sentences on signal-to-competition ratio for new entrants. `[inferred]`'
-
-    pick_note = (
-        f'Not a lesser signal — {pick_shops} `[our data]`'
-        if pick_count else 'Signal exists on Etsy but did not trigger `[our data]`'
-    )
-    rare_note = (
-        'Signal exists on Etsy but did not trigger `[our data]`'
-        if rare_count == 0 else f'{rare_count}/{n} `[our data]`'
-    )
-    high_demand_note = (
-        f'{in_demand_detail} `[our data]`'
-        if in_demand_listings else 'Signal exists on Etsy but did not trigger `[our data]`'
-    )
 
     new_section = f"""
 ## 6. Demand Signals Summary
 
 {v_line}
 
-### Etsy Demand Labels — Full Scan
+### Bestseller Badge Holders — Shop Entrenchment
 
-| Signal | Count | Notes |
+| Tier | Count | Criteria |
 |---|---|---|
-| Bestseller badge | {bs_count}/{n} | Core volume signal — awarded for recent sales + conversion rate `[market knowledge]` |
-| Etsy's Pick badge | {pick_count}/{n} | {pick_note} |
-| In-carts detected | {in_carts_any}/{n} | {in_carts_null} listings returned null — scraper could not read the signal `[our data]` |
-| "In demand. N bought in last 24h" | {len(in_demand_listings)}/{n} | {high_demand_note} |
-| "In high demand" badge | 0/{n} | Signal exists on Etsy but did not trigger `[our data]` |
-| "Rare find" badge | {rare_count}/{n} | {rare_note} |
+| Entrenched | {n_entrenched}/{bs_count} | 100k+ shop sales or 5+ years on Etsy `[our data]` |
+| Mid-tier | {n_mid}/{bs_count} | 20k–100k sales or 2–5 years `[our data]` |
+| Accessible | {n_accessible}/{bs_count} | Under 20k sales and under 5 years `[our data]` |
 
 {b_line}
+
+### Etsy Demand Labels — Full Scan
+
+| Signal | Count | Reliability | Notes |
+|---|---|---|---|
+| Bestseller badge | {bs_count}/{n} | Strong | Sustained 6-month sales volume — official Etsy criteria `[market knowledge]` |
+| Etsy's Pick badge | {pick_count}/{n} | Medium | {pick_note} |
+| In-carts detected | {in_carts_any}/{n} | Medium | Intent signal — not a purchase; {in_carts_null} listings returned null `[our data]` |
+| "N bought in last 24h" | {len(in_demand_listings)}/{n} | Snapshot only | {demand_24h_note} |
 
 ### In-Carts Heat
 
 | Cart level | Listings | Signal |
 |---|---|---|
-| 20+ (Etsy caps display here) | {b20}/{n} | Hot — real counts likely higher than 20 `[market knowledge]` |
+| 20+ (Etsy display cap) | {b20}/{n} | Hot — real counts likely higher `[market knowledge]` |
 | 11–19 | {b11}/{n} | Warm |
 | 1–10 | {b1}/{n} | Mild |
 | Not detected (null) | {in_carts_null}/{n} | Unknown — scraper could not read `[our data]` |
@@ -220,8 +283,10 @@ def update_demand_signals_in_md(md_text, comp_data, patterns_config):
 
 ### Demand by Pattern Segment
 
-| Pattern | Listings | Bestseller | Carts > 0 | Carts 20+ | Avg Reviews |
-|---|---|---|---|---|---|
+*Entry Score = bestseller% ÷ listing count. Higher = more proven demand per competitor. Patterns with fewer than 3 listings excluded.*
+
+| Pattern | Listings | Bestseller | Carts > 0 | Carts 20+ | Avg Reviews | Entry Score |
+|---|---|---|---|---|---|---|
 {chr(10).join(pattern_rows)}
 
 {p_line}

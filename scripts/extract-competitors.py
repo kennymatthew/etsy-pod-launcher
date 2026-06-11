@@ -300,6 +300,10 @@ def parse_structured(content, listing_id, creation_date=None):
     m = re.search(r'([\d,]+(?:\.\d+)?k?)\s+sales', content, re.IGNORECASE)
     result['shop_sales'] = parse_k_number(m.group(1)) if m else None
 
+    # Shop age in years — Etsy displays "X years on Etsy" or "X.X years on Etsy" or "1 year on Etsy"
+    m = re.search(r'([\d]+(?:\.\d+)?)\s+years?\s+on\s+Etsy', content, re.IGNORECASE)
+    result['shop_years_on_etsy'] = float(m.group(1)) if m else None
+
     # All product listing images — only from before cross-sell noise sections
     img_section = content[:_noise_boundary(content)]
     all_img_urls = list(dict.fromkeys(
@@ -957,6 +961,7 @@ def main():
             'reviews':                    structured['reviews'],
             'rating':                     structured['rating'],
             'shop_sales':                 structured['shop_sales'],
+            'shop_years_on_etsy':         structured['shop_years_on_etsy'],
             'product_type':               rule_based.get('product_type'),
             'is_shirt':                   rule_based.get('is_shirt', False),
             'blank':                      rule_based.get('blank'),
