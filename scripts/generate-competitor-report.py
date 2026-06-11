@@ -2230,7 +2230,7 @@ render();
       <!-- ── SECTION 2: SHOP LEVEL ── -->
       <p style="margin:22px 0 8px;font-size:13px;font-weight:700;color:#111;">🏪 Shop-level  <span style="font-weight:400;font-size:12px;color:#6B7280;">(🏪 Shop Intelligence tab)</span></p>
 
-      <p style="margin:0 0 6px;font-size:12px;font-weight:600;color:#374151;">Signals — three independent estimates cross-checked against each other</p>
+      <p style="margin:0 0 6px;font-size:12px;font-weight:600;color:#374151;">Signals — two independent estimates cross-checked against each other</p>
       <table style="border-collapse:collapse;width:100%;font-size:12px;">
         <tr style="background:#F3F4F6;">
           <td style="padding:7px 10px;font-weight:600;white-space:nowrap;width:170px;">M1 — Lifetime avg</td>
@@ -2241,12 +2241,8 @@ render();
           <td style="padding:7px 10px;"><strong>(review_count &divide; span_days) &times; 30 &times; 7.</strong> Scrapes up to 20 pages of the shop&rsquo;s /reviews, stopping when the oldest review reaches 5 months ago. Counts every review occurrence including multiple reviews on the same day. Calculates a daily rate, projects to 30 days, multiplies by 7. 5-month window smooths seasonal spikes (Father&rsquo;s Day, Christmas). Most responsive signal &mdash; reflects what the shop is doing <em>right now</em>.</td>
         </tr>
         <tr style="background:#F3F4F6;">
-          <td style="padding:7px 10px;font-weight:600;white-space:nowrap;">M3 — Listing rollup</td>
-          <td style="padding:7px 10px;"><strong>Sum of estimated_monthly_sales for all this shop&rsquo;s listings in competitors.json.</strong> Bottom-up cross-check. Usually a lower bound &mdash; competitors.json only contains top scraped listings, not every listing the shop has.</td>
-        </tr>
-        <tr>
           <td style="padding:7px 10px;font-weight:600;white-space:nowrap;">Headline (Est/mo)</td>
-          <td style="padding:7px 10px;">Priority order: <strong>M2 &rarr; M1 &rarr; M3.</strong> M2 used first (most current). Falls back to M1 if too few reviews were scraped, then M3 as last resort.</td>
+          <td style="padding:7px 10px;">Priority order: <strong>M2 &rarr; M1.</strong> M2 used first (most current). Falls back to M1 if too few reviews were scraped.</td>
         </tr>
       </table>
 
@@ -2271,12 +2267,12 @@ render();
         </tr>
       </table>
 
-      <p style="margin:14px 0 6px;font-size:12px;font-weight:600;color:#374151;">Confidence &mdash; how much do the three signals agree?</p>
-      <p style="margin:0 0 8px;font-size:12px;color:#6B7280;">Measured as: <strong>(max signal &minus; min signal) &divide; max signal</strong>. The further the signals diverge, the lower the confidence.</p>
+      <p style="margin:14px 0 6px;font-size:12px;font-weight:600;color:#374151;">Confidence &mdash; how much do M1 and M2 agree?</p>
+      <p style="margin:0 0 8px;font-size:12px;color:#6B7280;">Measured as: <strong>(max &minus; min) &divide; max</strong>. The further M1 and M2 diverge, the lower the confidence. If only one signal is available, confidence is capped at Medium.</p>
       <table style="border-collapse:collapse;width:100%;font-size:12px;">
         <tr style="background:#F3F4F6;">
           <td style="padding:7px 10px;font-weight:600;white-space:nowrap;width:170px;"><span style="background:#D1FAE5;color:#065F46;padding:2px 9px;border-radius:4px;">High</span></td>
-          <td style="padding:7px 10px;">Signals diverge &lt;40%. M1, M2, M3 all agree &mdash; estimate is reliable.</td>
+          <td style="padding:7px 10px;">M1 and M2 diverge &lt;40%, or M2 &ge; 2&times; M1 (rapid growth detected) &mdash; estimate is reliable.</td>
         </tr>
         <tr>
           <td style="padding:7px 10px;font-weight:600;white-space:nowrap;"><span style="background:#FEF3C7;color:#92400E;padding:2px 9px;border-radius:4px;">Medium</span></td>
