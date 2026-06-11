@@ -100,6 +100,98 @@ def _extract_interp_slots(section_text):
     return cleaned[:4]
 
 
+def _fpr_confidence(reviews):
+    """Deterministic confidence tier for FPR based on review count."""
+    if reviews >= 20:
+        return '✅ High'
+    elif reviews >= 5:
+        return '⚠️ Medium'
+    else:
+        return '❌ Low'
+
+
+def update_listings_to_watch_in_md(md_text, comp_data):
+    """Rewrite Section 7 (Listings to Watch) — fully deterministic, no AI fill-in."""
+    shirts = [e for e in comp_data if e.get('is_shirt')]
+    fpr_entries = []
+    for e in shirts:
+        fpr = e.get('favorites_per_review')
+        if not fpr or fpr <= 0:
+            continue
+        reviews  = e.get('reviews') or 0
+        sales    = e.get('shop_sales') or 0
+        yrs      = e.get('shop_years_on_etsy')
+        fpr_entries.append({
+            'id':       e.get('id'),
+            'title':    (e.get('title') or '')[:52],
+            'fpr':      fpr,
+            'reviews':  reviews,
+            'favorites': e.get('favorites_count') or 0,
+            'bs':       e.get('is_bestseller', False),
+            'carts':    e.get('in_carts'),
+            'sales':    sales,
+            'years':    yrs,
+            'conf':     _fpr_confidence(reviews),
+        })
+    top5 = sorted(fpr_entries, key=lambda x: -x['fpr'])[:5]
+
+    if not top5:
+        return md_text
+
+    # Auto-commentary
+    low_conf   = sum(1 for r in top5 if r['conf'] == '❌ Low')
+    accessible = sum(1 for r in top5 if r['sales'] < 20_000)
+    bs_count   = sum(1 for r in top5 if r['bs'])
+
+    warn_line = (
+        f'\n⚠️ **Data quality note:** {low_conf} of 5 listings have fewer than 5 reviews — '
+        f'FPR is unreliable at this sample size; treat as directional only. `[our data]`\n'
+        if low_conf else ''
+    )
+    entry_note = (
+        'suggesting this pattern is reachable for a new entrant'
+        if accessible >= 3
+        else 'most are from established shops — harder to replicate quickly'
+    )
+    commentary = (
+        f'{bs_count}/5 top-FPR listings carry a Bestseller badge despite low review counts. `[our data]` '
+        f'{accessible}/5 are from shops with under 20k total sales — {entry_note}. `[inferred]`'
+    )
+
+    rows = []
+    for i, r in enumerate(top5, 1):
+        carts = r['carts'] if r['carts'] is not None else 'null'
+        yrs   = f"{r['years']:.1f}" if r['years'] else '?'
+        bs    = '✓' if r['bs'] else '—'
+        rows.append(
+            f"| {i} | {r['id']} | {r['title']} | {r['fpr']} "
+            f"| {r['reviews']} | {r['favorites']:,} | {bs} | {carts} "
+            f"| {r['sales']:,} | {yrs} | {r['conf']} |"
+        )
+
+    new_section = f"""
+## 7. Listings to Watch
+
+*(favorites_per_review > 0 — high buyer interest relative to review count)*
+
+Shoppers are saving these items faster than they are leaving reviews — signals a newer listing gaining traction, a price above impulse-buy threshold, or a wishlist/gift item. `[market knowledge]` FPR is only reliable when reviews ≥ 20; lower counts are directional only. `[market knowledge]`
+{warn_line}
+| Rank | ID | Title (truncated) | FPR | Reviews | Favorites | Bestseller | In-Carts | Shop Sales | Shop Yrs | Confidence |
+|---|---|---|---|---|---|---|---|---|---|---|
+{chr(10).join(rows)}
+
+{commentary}
+
+---
+"""
+    start = md_text.find('\n## 7. Listings to Watch')
+    if start == -1:
+        return md_text
+    end_match = re.search(r'\n## [^7\n]', md_text[start + 1:])
+    end = start + 1 + end_match.start() if end_match else len(md_text)
+    return md_text[:start] + new_section + md_text[end:]
+
+
 def _entrenchment_tier(entry):
     """Classify a listing's shop as entrenched / mid / accessible.
 
@@ -2056,9 +2148,12 @@ def main():
     watchlist       = json.loads(watchlist_path.read_text()) if watchlist_path.exists() else []
     patterns_config = json.loads(patterns_path.read_text()) if patterns_path.exists() else None
 
-    # Refresh Section 6 tables from live data before rendering
+    # Refresh Section 6 + 7 from live data before rendering
     if insights_md and patterns_config:
         insights_md = update_demand_signals_in_md(insights_md, comp_data, patterns_config)
+    if insights_md:
+        insights_md = update_listings_to_watch_in_md(insights_md, comp_data)
+    if insights_md:
         insights_path.write_text(insights_md)
     date_str        = datetime.date.today().isoformat()
 

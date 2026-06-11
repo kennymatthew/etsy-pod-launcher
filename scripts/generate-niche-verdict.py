@@ -242,20 +242,41 @@ def compute_personalization_breakdown(entries):
 def compute_fpr_stats(entries):
     """
     For is_shirt=True entries with favorites_per_review > 0:
-    Return top 5, median FPR, count.
+    Return top 5 with full context, median FPR, count.
+    Confidence: High = reviews >= 20, Medium = 5-19, Low = < 5 (FPR is volatile at low counts).
     """
     shirts = [e for e in entries if e.get('is_shirt')]
-    fpr_entries = [
-        (e.get('id'), (e.get('title') or '')[:50], e.get('favorites_per_review'))
-        for e in shirts
-        if e.get('favorites_per_review') and e.get('favorites_per_review') > 0
-    ]
-    fpr_sorted = sorted(fpr_entries, key=lambda x: -x[2])
-    fpr_values = [x[2] for x in fpr_sorted]
+    fpr_entries = []
+    for e in shirts:
+        fpr = e.get('favorites_per_review')
+        if not fpr or fpr <= 0:
+            continue
+        reviews = e.get('reviews') or 0
+        if reviews >= 20:
+            confidence = ('✅ High', 'reviews ≥ 20')
+        elif reviews >= 5:
+            confidence = ('⚠️ Medium', 'reviews 5–19')
+        else:
+            confidence = ('❌ Low', 'reviews < 5 — FPR is volatile')
+        fpr_entries.append({
+            'id':            e.get('id'),
+            'title':         (e.get('title') or '')[:52],
+            'fpr':           fpr,
+            'reviews':       reviews,
+            'favorites':     e.get('favorites_count') or 0,
+            'is_bestseller': e.get('is_bestseller', False),
+            'in_carts':      e.get('in_carts'),
+            'shop_sales':    e.get('shop_sales') or 0,
+            'shop_years':    e.get('shop_years_on_etsy'),
+            'confidence':    confidence[0],
+            'conf_reason':   confidence[1],
+        })
+    fpr_sorted = sorted(fpr_entries, key=lambda x: -x['fpr'])
+    fpr_values = [x['fpr'] for x in fpr_sorted]
     return {
-        'top5': fpr_sorted[:5],
+        'top5':   fpr_sorted[:5],
         'median': round(statistics.median(fpr_values), 2) if fpr_values else None,
-        'count': len(fpr_values),
+        'count':  len(fpr_values),
     }
 
 
@@ -658,19 +679,29 @@ def main():
     print('[FILL IN: one sentence on whether name-only or photo-required listings have higher reviews in this niche]')
 
     # ── FPR Stats ─────────────────────────────────────────────────────────────
-    print(section_header('FPR Stats', 'paste into market-insights.md Section 5 / Section 8'))
+    print(section_header('FPR Stats', 'replace Section 7 (Listings to Watch) in market-insights.md'))
     fpr = compute_fpr_stats(entries)
     print(f'Shirt listings with FPR > 0: {fpr["count"]}')
     print(f'Median FPR: {fpr["median"]}')
     print()
-    print('Top 5 by favorites_per_review:')
+    print('| Rank | ID | Title (truncated) | FPR | Reviews | Favorites | Bestseller | In-Carts | Shop Sales | Shop Yrs | Confidence |')
+    print('|---|---|---|---|---|---|---|---|---|---|---|')
+    for i, r in enumerate(fpr['top5'], 1):
+        carts = r['in_carts'] if r['in_carts'] is not None else 'null'
+        yrs   = f'{r["shop_years"]:.1f}' if r['shop_years'] else '?'
+        bs    = '✓' if r['is_bestseller'] else '—'
+        print(f'| {i} | {r["id"]} | {r["title"]} | {r["fpr"]} | {r["reviews"]} | {r["favorites"]:,} | {bs} | {carts} | {r["shop_sales"]:,} | {yrs} | {r["confidence"]} |')
     print()
-    print('| Rank | ID | Title (truncated) | FPR |')
-    print('|---|---|---|---|')
-    for i, (lid, title, fpr_val) in enumerate(fpr['top5'], 1):
-        print(f'| {i} | {lid} | {title} | {fpr_val} |')
-    print()
-    print('[FILL IN: one sentence on what the top FPR listings have in common]')
+    # Auto-commentary
+    low_count  = sum(1 for r in fpr['top5'] if r['confidence'] == '❌ Low')
+    accessible = sum(1 for r in fpr['top5'] if r['shop_sales'] < 20_000)
+    bs_count   = sum(1 for r in fpr['top5'] if r['is_bestseller'])
+    if low_count:
+        print(f'⚠️  {low_count} of 5 top-FPR listings have fewer than 5 reviews — FPR is unreliable at this sample size; treat as directional only. `[our data]`')
+    print(f'{bs_count}/5 top-FPR listings carry a Bestseller badge despite low review counts. `[our data]` '
+          f'{accessible}/5 are from accessible shops (under 20k total sales) — '
+          f'{"suggesting this pattern is reachable for a new entrant" if accessible >= 3 else "most are from established shops — harder to replicate quickly"}. `[inferred]`')
+    print('[AI instruction: do NOT add titles, IDs, or counts not shown above]')
 
     # ── Reviews Percentiles ───────────────────────────────────────────────────
     print(section_header('Reviews Percentiles', 'paste into market-insights.md Section 6 / Appendix'))
