@@ -2267,6 +2267,30 @@ render();
         </tr>
       </table>
 
+      <p style="margin:22px 0 6px;font-size:12px;font-weight:600;color:#374151;">7d Reviews &mdash; pulse check</p>
+      <p style="margin:0 0 8px;font-size:12px;color:#6B7280;">Count of reviews left on the shop in the last 7 days, parsed from raw review pages. Confirms the shop is actively selling <em>this week</em>. Sourced from <code>shop-velocity.json</code> (run <code>analyze-shop-velocity.py</code> to populate). Shows &mdash; if velocity data is unavailable.</p>
+
+      <p style="margin:22px 0 6px;font-size:12px;font-weight:600;color:#374151;">Momentum &mdash; is pace accelerating or slowing vs the last 30 days?</p>
+      <p style="margin:0 0 8px;font-size:12px;color:#6B7280;">Formula: <strong>7d reviews &divide; (30d reviews &divide; 4)</strong>. Compares this week&rsquo;s review rate to the average weekly rate over the last 30 days. 1.0x = perfectly flat pace. <em>Caveat: the 7-day window is included in the 30-day count, so true acceleration is slightly understated.</em> Sourced from <code>shop-velocity.json</code>.</p>
+      <table style="border-collapse:collapse;width:100%;font-size:12px;">
+        <tr style="background:#F3F4F6;">
+          <td style="padding:7px 10px;font-weight:600;white-space:nowrap;width:170px;"><span style="color:#C2410C;font-weight:700;">&gt;1.5x 🔥 Surging</span></td>
+          <td style="padding:7px 10px;">This week is 50%+ above the 30-day average pace.</td>
+        </tr>
+        <tr>
+          <td style="padding:7px 10px;font-weight:600;white-space:nowrap;"><span style="color:#15803d;font-weight:700;">1.1–1.5x ↑ Growing</span></td>
+          <td style="padding:7px 10px;">Accelerating vs recent baseline.</td>
+        </tr>
+        <tr style="background:#F3F4F6;">
+          <td style="padding:7px 10px;font-weight:600;white-space:nowrap;"><span style="color:#6b7280;font-weight:700;">0.9–1.1x → Stable</span></td>
+          <td style="padding:7px 10px;">This week matches the 30-day average &mdash; consistent pace.</td>
+        </tr>
+        <tr>
+          <td style="padding:7px 10px;font-weight:600;white-space:nowrap;"><span style="color:#1d4ed8;font-weight:700;">&lt;0.9x ↓ Cooling</span></td>
+          <td style="padding:7px 10px;">This week is below the 30-day average &mdash; pace is slowing.</td>
+        </tr>
+      </table>
+
       <p style="margin:14px 0 6px;font-size:12px;font-weight:600;color:#374151;">Confidence &mdash; how much do M1 and M2 agree?</p>
       <p style="margin:0 0 8px;font-size:12px;color:#6B7280;">Measured as: <strong>(max &minus; min) &divide; max</strong>. The further M1 and M2 diverge, the lower the confidence. If only one signal is available, confidence is capped at Medium.</p>
       <table style="border-collapse:collapse;width:100%;font-size:12px;">
