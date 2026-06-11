@@ -273,8 +273,12 @@ def compute_fpr_stats(entries):
         })
     fpr_sorted = sorted(fpr_entries, key=lambda x: -x['fpr'])
     fpr_values = [x['fpr'] for x in fpr_sorted]
+    tier1 = [e for e in fpr_sorted if e['fpr'] > 5.0 and e['reviews'] >= 20]
+    tier2 = [e for e in fpr_sorted if e['fpr'] > 10.0 and e['reviews'] < 20]
     return {
-        'top5':   fpr_sorted[:5],
+        'top5':   fpr_sorted[:5],   # kept for backward compat
+        'tier1':  tier1,
+        'tier2':  tier2,
         'median': round(statistics.median(fpr_values), 2) if fpr_values else None,
         'count':  len(fpr_values),
     }
@@ -684,23 +688,53 @@ def main():
     print(f'Shirt listings with FPR > 0: {fpr["count"]}')
     print(f'Median FPR: {fpr["median"]}')
     print()
-    print('| Rank | ID | Title (truncated) | FPR | Reviews | Favorites | Bestseller | In-Carts | Shop Sales | Shop Yrs | Confidence |')
-    print('|---|---|---|---|---|---|---|---|---|---|---|')
-    for i, r in enumerate(fpr['top5'], 1):
-        carts = r['in_carts'] if r['in_carts'] is not None else 'null'
-        yrs   = f'{r["shop_years"]:.1f}' if r['shop_years'] else '?'
-        bs    = '✓' if r['is_bestseller'] else '—'
-        print(f'| {i} | {r["id"]} | {r["title"]} | {r["fpr"]} | {r["reviews"]} | {r["favorites"]:,} | {bs} | {carts} | {r["shop_sales"]:,} | {yrs} | {r["confidence"]} |')
+
+    col_header = '| Rank | ID | Title (truncated) | FPR | Reviews | Favorites | Bestseller | In-Carts | Shop Sales | Shop Yrs | Confidence |'
+    col_sep    = '|---|---|---|---|---|---|---|---|---|---|---|'
+
+    def _fpr_rows(entries):
+        for i, r in enumerate(entries, 1):
+            carts = r['in_carts'] if r['in_carts'] is not None else 'null'
+            yrs   = f'{r["shop_years"]:.1f}' if r['shop_years'] else '?'
+            bs    = '✓' if r['is_bestseller'] else '—'
+            print(f'| {i} | {r["id"]} | {r["title"]} | {r["fpr"]} | {r["reviews"]} | {r["favorites"]:,} | {bs} | {carts} | {r["shop_sales"]:,} | {yrs} | {r["confidence"]} |')
+
+    # Tier 1
+    print('### Tier 1 — Reliable (reviews ≥ 20, FPR > 5.0)')
     print()
-    # Auto-commentary
-    low_count  = sum(1 for r in fpr['top5'] if r['confidence'] == '❌ Low')
-    accessible = sum(1 for r in fpr['top5'] if r['shop_sales'] < 20_000)
-    bs_count   = sum(1 for r in fpr['top5'] if r['is_bestseller'])
-    if low_count:
-        print(f'⚠️  {low_count} of 5 top-FPR listings have fewer than 5 reviews — FPR is unreliable at this sample size; treat as directional only. `[our data]`')
-    print(f'{bs_count}/5 top-FPR listings carry a Bestseller badge despite low review counts. `[our data]` '
-          f'{accessible}/5 are from accessible shops (under 20k total sales) — '
-          f'{"suggesting this pattern is reachable for a new entrant" if accessible >= 3 else "most are from established shops — harder to replicate quickly"}. `[inferred]`')
+    if fpr['tier1']:
+        print(col_header)
+        print(col_sep)
+        _fpr_rows(fpr['tier1'])
+    else:
+        print('*No listings meet Tier 1 criteria.*')
+    print()
+
+    # Tier 2
+    if fpr['tier2']:
+        print('### Tier 2 — Directional only (reviews < 20, FPR > 10.0 — treat as weak signal)')
+        print()
+        low_conf_t2 = sum(1 for r in fpr['tier2'] if r['confidence'] == '❌ Low')
+        if low_conf_t2:
+            print(f'⚠️  {low_conf_t2} of {len(fpr["tier2"])} Tier 2 listings have fewer than 5 reviews — FPR is unreliable at this sample size; treat as directional only. `[our data]`')
+            print()
+        print(col_header)
+        print(col_sep)
+        _fpr_rows(fpr['tier2'])
+        print()
+
+    # Auto-commentary across both tiers
+    all_entries = fpr['tier1'] + fpr['tier2']
+    accessible  = sum(1 for r in all_entries if r['shop_sales'] < 20_000)
+    bs_count    = sum(1 for r in all_entries if r['is_bestseller'])
+    entry_note  = (
+        'suggesting this pattern is reachable for a new entrant'
+        if accessible >= 3
+        else 'most are from established shops — harder to replicate quickly'
+    )
+    print(f'Tier 1 ({len(fpr["tier1"])} reliable listings) + Tier 2 ({len(fpr["tier2"])} directional). `[our data]` '
+          f'{bs_count} top-FPR listings carry a Bestseller badge. `[our data]` '
+          f'{accessible} across both tiers are from shops with under 20k total sales — {entry_note}. `[inferred]`')
     print('[AI instruction: do NOT add titles, IDs, or counts not shown above]')
 
     # ── Reviews Percentiles ───────────────────────────────────────────────────

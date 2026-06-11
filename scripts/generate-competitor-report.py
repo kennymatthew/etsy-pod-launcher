@@ -133,53 +133,87 @@ def update_listings_to_watch_in_md(md_text, comp_data):
             'years':    yrs,
             'conf':     _fpr_confidence(reviews),
         })
-    top5 = sorted(fpr_entries, key=lambda x: -x['fpr'])[:5]
+    tier1 = sorted(
+        [e for e in fpr_entries if e['fpr'] > 5.0 and e['reviews'] >= 20],
+        key=lambda x: -x['fpr']
+    )
+    tier2 = sorted(
+        [e for e in fpr_entries if e['fpr'] > 10.0 and e['reviews'] < 20],
+        key=lambda x: -x['fpr']
+    )
 
-    if not top5:
+    if not tier1 and not tier2:
         return md_text
 
-    # Auto-commentary
-    low_conf   = sum(1 for r in top5 if r['conf'] == '❌ Low')
-    accessible = sum(1 for r in top5 if r['sales'] < 20_000)
-    bs_count   = sum(1 for r in top5 if r['bs'])
+    col_header = '| Rank | ID | Title (truncated) | FPR | Reviews | Favorites | Bestseller | In-Carts | Shop Sales | Shop Yrs | Confidence |'
+    col_sep    = '|---|---|---|---|---|---|---|---|---|---|---|'
 
-    warn_line = (
-        f'\n⚠️ **Data quality note:** {low_conf} of 5 listings have fewer than 5 reviews — '
-        f'FPR is unreliable at this sample size; treat as directional only. `[our data]`\n'
-        if low_conf else ''
-    )
-    entry_note = (
+    def build_rows(entries):
+        rows = []
+        for i, r in enumerate(entries, 1):
+            carts = r['carts'] if r['carts'] is not None else 'null'
+            yrs   = f"{r['years']:.1f}" if r['years'] else '?'
+            bs    = '✓' if r['bs'] else '—'
+            rows.append(
+                f"| {i} | {r['id']} | {r['title']} | {r['fpr']} "
+                f"| {r['reviews']} | {r['favorites']:,} | {bs} | {carts} "
+                f"| {r['sales']:,} | {yrs} | {r['conf']} |"
+            )
+        return rows
+
+    # Tier 1 block
+    if tier1:
+        tier1_block = (
+            f'### Tier 1 — Reliable (reviews ≥ 20, FPR > 5.0)\n\n'
+            f'{col_header}\n{col_sep}\n'
+            + chr(10).join(build_rows(tier1))
+        )
+    else:
+        tier1_block = '### Tier 1 — Reliable (reviews ≥ 20, FPR > 5.0)\n\n*No listings meet Tier 1 criteria.*'
+
+    # Tier 2 block (omit if empty)
+    if tier2:
+        low_conf_t2 = sum(1 for r in tier2 if r['conf'] == '❌ Low')
+        warn_line = (
+            f'\n⚠️ **Data quality note:** {low_conf_t2} of {len(tier2)} Tier 2 listings have fewer than 5 reviews — '
+            f'FPR is unreliable at this sample size; treat as directional only. `[our data]`\n'
+            if low_conf_t2 else ''
+        )
+        tier2_block = (
+            f'### Tier 2 — Directional only (reviews < 20, FPR > 10.0 — treat as weak signal)\n'
+            f'{warn_line}\n'
+            f'{col_header}\n{col_sep}\n'
+            + chr(10).join(build_rows(tier2))
+        )
+    else:
+        tier2_block = ''
+
+    # Auto-commentary across both tiers
+    all_entries = tier1 + tier2
+    accessible  = sum(1 for r in all_entries if r['sales'] < 20_000)
+    bs_count    = sum(1 for r in all_entries if r['bs'])
+    entry_note  = (
         'suggesting this pattern is reachable for a new entrant'
         if accessible >= 3
         else 'most are from established shops — harder to replicate quickly'
     )
     commentary = (
-        f'{bs_count}/5 top-FPR listings carry a Bestseller badge despite low review counts. `[our data]` '
-        f'{accessible}/5 are from shops with under 20k total sales — {entry_note}. `[inferred]`'
+        f'Tier 1 ({len(tier1)} reliable listings) + Tier 2 ({len(tier2)} directional). `[our data]` '
+        f'{bs_count} top-FPR listings carry a Bestseller badge. `[our data]` '
+        f'{accessible} across both tiers are from shops with under 20k total sales — {entry_note}. `[inferred]`'
     )
 
-    rows = []
-    for i, r in enumerate(top5, 1):
-        carts = r['carts'] if r['carts'] is not None else 'null'
-        yrs   = f"{r['years']:.1f}" if r['years'] else '?'
-        bs    = '✓' if r['bs'] else '—'
-        rows.append(
-            f"| {i} | {r['id']} | {r['title']} | {r['fpr']} "
-            f"| {r['reviews']} | {r['favorites']:,} | {bs} | {carts} "
-            f"| {r['sales']:,} | {yrs} | {r['conf']} |"
-        )
+    tier2_section = f'\n{tier2_block}\n' if tier2_block else ''
 
     new_section = f"""
 ## 7. Listings to Watch
 
-*(favorites_per_review > 0 — high buyer interest relative to review count)*
+*(favorites_per_review — high buyer interest relative to review count)*
 
 Shoppers are saving these items faster than they are leaving reviews — signals a newer listing gaining traction, a price above impulse-buy threshold, or a wishlist/gift item. `[market knowledge]` FPR is only reliable when reviews ≥ 20; lower counts are directional only. `[market knowledge]`
-{warn_line}
-| Rank | ID | Title (truncated) | FPR | Reviews | Favorites | Bestseller | In-Carts | Shop Sales | Shop Yrs | Confidence |
-|---|---|---|---|---|---|---|---|---|---|---|
-{chr(10).join(rows)}
 
+{tier1_block}
+{tier2_section}
 {commentary}
 
 ---
