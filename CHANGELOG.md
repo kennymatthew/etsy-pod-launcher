@@ -9,6 +9,16 @@ Version numbering:
 
 ---
 
+## [v1.10.0] — 2026-06-12
+
+### Changed
+- **Est/mo headline now uses velocity `est_sales_30d` as primary signal** (reviews in last 30 calendar days ÷ 10% review rate) — fixed window, consistent across all shops regardless of review pace. M2 → M1 remain as fallbacks. M2 is still used for Trend and Confidence cross-validation.
+- Shop Intelligence table now sorts by velocity `est_sales_30d` first, falling back to M2/M1 if unavailable.
+- Updated all legends, tooltips, subtitles, and "How is this calculated?" footer to reflect new priority order and explain why velocity is more accurate than M2 extrapolation.
+- `generate-phase1-report.py` — removed M3 reference; updated shop methodology note to reflect velocity → M2 → M1 priority.
+
+---
+
 ## [v1.9.0] — 2026-06-12
 
 ### Added

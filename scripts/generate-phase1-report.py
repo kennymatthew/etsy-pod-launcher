@@ -346,7 +346,7 @@ def section_who_is_winning(st, shops):
         m2 = s.get('method2_current_momentum') or '—'
         shop_rows += f'<tr><td><a href="https://www.etsy.com/shop/{name}" target="_blank">{name}</a></td><td>{est:,}/mo' if isinstance(est, int) else f'<tr><td>{name}</td><td>{est}'
         shop_rows += f'</td><td>{total:,}' if isinstance(total, int) else f'</td><td>{total}'
-        shop_rows += f'</td><td>{trend_icon}</td><td>{conf}</td><td>M1={m1} / M2={m2}</td></tr>\n'
+        shop_rows += f'</td><td>{trend_icon}</td><td>{conf}</td><td>M1={m1} / M2={m2} (cross-validation only)</td></tr>\n'
 
     # Dominant formula description — pulled from actual top 5 listings
     top3 = st['top3_shirt']
@@ -363,7 +363,7 @@ def section_who_is_winning(st, shops):
   <h2>Who's Winning and Why</h2>
 
   <h3>Top 3 Shops by Estimated Monthly Sales</h3>
-  {p("Shop EMS is estimated using 3 methods: (M1) total shop sales ÷ months active, (M2) review velocity from last 5 months of review pages, (M3) sum of listing EMS from competitors.json. Confidence reflects cross-validation between available methods. `[our data]`")}
+  {p("Shop Est/mo uses velocity est_sales_30d (reviews in last 30 days ÷ 10% review rate) as primary signal. Falls back to M2 (variable-span review rate × 7) then M1 (total sales ÷ months active). M2 and M1 are used for Trend and Confidence cross-validation. `[our data]`")}
   <table>
     <thead><tr><th>Shop</th><th>Est. Monthly Sales</th><th>Total Sales</th><th>Trend</th><th>Confidence</th><th>Method cross-check</th></tr></thead>
     <tbody>{shop_rows}</tbody>

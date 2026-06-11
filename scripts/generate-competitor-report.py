@@ -1313,7 +1313,6 @@ def build_shop_intel_tab(watchlist, velocity=None):
         )
 
     shops = [s for s in watchlist if 'error' not in s]
-    shops.sort(key=lambda s: s.get('estimated_monthly_sales') or s.get('method1_lifetime_avg_monthly') or 0, reverse=True)
 
     # Build velocity lookup by shop name
     vel_map = {}
@@ -1321,6 +1320,13 @@ def build_shop_intel_tab(watchlist, velocity=None):
         for v in velocity:
             key = v.get('shop') or v.get('shop_name', '')
             vel_map[key] = v
+
+    # Sort by velocity est_sales_30d first, fall back to watchlist estimated_monthly_sales, then M1
+    def _sort_key(s):
+        name = s.get('shop_name', '')
+        v = vel_map.get(name, {})
+        return v.get('est_sales_30d') or s.get('estimated_monthly_sales') or s.get('method1_lifetime_avg_monthly') or 0
+    shops.sort(key=_sort_key, reverse=True)
 
     trend_icon  = {'growing': '↑', 'declining': '↓', 'stable': '→', 'unknown': '–'}
     trend_color = {'growing': 'si-trend-up', 'declining': 'si-trend-down', 'stable': 'si-trend-stable', 'unknown': 'si-trend-unknown'}
@@ -1333,7 +1339,9 @@ def build_shop_intel_tab(watchlist, velocity=None):
         m2          = s.get('method2_current_momentum')
         m1          = s.get('method1_lifetime_avg_monthly')
         m2_window   = s.get('method2_window') or ''
-        headline    = m2 or m1 or '—'
+        vel         = vel_map.get(name, {})
+        vel_est     = vel.get('est_sales_30d')
+        headline    = vel_est or m2 or m1 or '—'
         trend       = s.get('trend_signal') or 'unknown'
         conf        = s.get('confidence') or 'low'
         total_sales = s.get('total_sales')
@@ -1347,7 +1355,6 @@ def build_shop_intel_tab(watchlist, velocity=None):
         notes_html  = ('<div class="si-notes">' + ' &middot; '.join(notes[:2]) + '</div>') if notes else ''
 
         # Velocity columns — inline from vel_map, no separate table
-        vel      = vel_map.get(name, {})
         r7       = vel.get('reviews_7d')
         momentum = vel.get('momentum_ratio')
         r7_str   = f'{r7:,}' if isinstance(r7, int) else '—'
@@ -1386,14 +1393,14 @@ def build_shop_intel_tab(watchlist, velocity=None):
         '\n<div class="si-header">'
         '\n  <h1>Shop Intelligence</h1>'
         '\n  <p class="si-subtitle">Monthly sales estimates, current momentum, and confidence signals per competitor shop. '
-        '<strong>Est/mo</strong> uses M2 (5-month review-rate window) as primary signal; falls back to M1 (lifetime average) if M2 is unavailable. '
-        'All estimates assume 1-in-7 buyers leave a review (~14% review rate — apparel industry proxy). '
-        'Review velocity and momentum columns are inline in this table. See legend below for methodology.</p>'
+        '<strong>Est/mo</strong> uses the actual 30-day review count (÷ 10% review rate) as primary signal; falls back to M2 then M1 if velocity data is unavailable. '
+        'M2 and M1 assume 1-in-7 buyers leave a review (~14%). '
+        'See legend below for methodology.</p>'
         '\n</div>'
         '\n<div class="si-table-wrap"><table class="si-table">'
         '\n<thead><tr>'
         '<th>Shop</th>'
-        '<th title="Est monthly sales — M2 primary, M1 fallback. Assumes 1-in-7 buyers leave a review (~14% review rate).">Est/mo</th>'
+        '<th title="Est monthly sales — velocity est_sales_30d primary (reviews_30d ÷ 10%), then M2, then M1 fallback.">Est/mo</th>'
         '<th title="M1 Lifetime avg: total Etsy lifetime sales ÷ months active. Historical average — not current pace. May use \'X years on Etsy\' as approximation if exact open date unavailable (flagged as relative).">M1 Lifetime</th>'
         '<th title="M2 Current pace: review rate over 5-month window × 30 × 7. Best signal for recent momentum. Hover cell for window detail.">M2 Current</th>'
         '<th title="Reviews left in the last 7 days. Confirms shop is actively selling this week.">7d Reviews</th>'
@@ -1406,7 +1413,7 @@ def build_shop_intel_tab(watchlist, velocity=None):
         '\n<tbody>' + rows + '</tbody>'
         '\n</table></div>'
         '\n<div class="si-legend">'
-        '<strong>Est/mo</strong> M2 primary, M1 fallback — both assume 1-in-7 buyers leave a review (~14% rate; apparel industry proxy) &nbsp;·&nbsp; '
+        '<strong>Est/mo</strong> Primary: velocity <code>est_sales_30d</code> = reviews in last 30 days ÷ 10% review rate (fixed window, most accurate). Fallback: M2 → M1 if velocity data unavailable &nbsp;·&nbsp; '
         '<strong>M1 Lifetime</strong> total lifetime Etsy sales ÷ months active — historical average, not current pace. May use "X years on Etsy" as approximation when exact open date is unavailable (precision flagged as relative in source data) &nbsp;·&nbsp; '
         '<strong>M2 Current</strong> review rate × 30 × 7 over 5-month window — best signal for what the shop is doing right now &nbsp;·&nbsp; '
         '<strong>7d Reviews</strong> reviews in the last 7 days — pulse check; confirms the shop is actively selling this week &nbsp;·&nbsp; '
@@ -1419,7 +1426,7 @@ def build_shop_intel_tab(watchlist, velocity=None):
         'Medium = 40–70% divergence or only one signal available &nbsp;·&nbsp; '
         'Low = &gt;70% divergence without a clear growth explanation &nbsp;·&nbsp; '
         '<strong>Age (mo)</strong> months since shop opened; approximate when derived from "X years on Etsy" display text (precision: relative) &nbsp;·&nbsp; '
-        '<em>Review rate: M1/M2 use ~14% (1-in-7 buyers) for watchlist estimates; analyze-shop-velocity.py uses 10% by default — override with --review-rate if you want consistency.</em>'
+        '<em>Review rates: Est/mo (velocity) uses 10% — the more widely cited apparel figure. M2 uses 14% (1-in-7) — used for Trend and Confidence cross-validation only, not the headline.</em>'
         f'{scrape_note}'
         '</div>'
         '\n</div>'
@@ -2230,24 +2237,24 @@ render();
       <!-- ── SECTION 2: SHOP LEVEL ── -->
       <p style="margin:22px 0 8px;font-size:13px;font-weight:700;color:#111;">🏪 Shop-level  <span style="font-weight:400;font-size:12px;color:#6B7280;">(🏪 Shop Intelligence tab)</span></p>
 
-      <p style="margin:0 0 6px;font-size:12px;font-weight:600;color:#374151;">Signals — two independent estimates cross-checked against each other</p>
+      <p style="margin:0 0 6px;font-size:12px;font-weight:600;color:#374151;">Signals — three estimates, priority order for headline</p>
       <table style="border-collapse:collapse;width:100%;font-size:12px;">
         <tr style="background:#F3F4F6;">
-          <td style="padding:7px 10px;font-weight:600;white-space:nowrap;width:170px;">M1 — Lifetime avg</td>
-          <td style="padding:7px 10px;"><strong>total_sales &divide; months_active.</strong> Scraped from the shop page. Stable signal but lags &mdash; a fast-growing shop will look underestimated here.</td>
+          <td style="padding:7px 10px;font-weight:600;white-space:nowrap;width:170px;">Velocity est_sales_30d <span style="background:#D1FAE5;color:#065F46;padding:1px 6px;border-radius:4px;font-size:10px;">PRIMARY</span></td>
+          <td style="padding:7px 10px;"><strong>reviews_30d &divide; 10% review rate.</strong> Counts every review left in the last 30 calendar days from <code>shop-velocity.json</code>, then divides by 0.10. Fixed window &mdash; always a fair apples-to-apples comparison across all shops regardless of how fast they get reviews. Run <code>analyze-shop-velocity.py</code> to generate this data.</td>
         </tr>
         <tr>
-          <td style="padding:7px 10px;font-weight:600;white-space:nowrap;">M2 — Current pace</td>
-          <td style="padding:7px 10px;"><strong>(review_count &divide; span_days) &times; 30 &times; 7.</strong> Scrapes up to 20 pages of the shop&rsquo;s /reviews, stopping when the oldest review reaches 5 months ago. Counts every review occurrence including multiple reviews on the same day. Calculates a daily rate, projects to 30 days, multiplies by 7. 5-month window smooths seasonal spikes (Father&rsquo;s Day, Christmas). Most responsive signal &mdash; reflects what the shop is doing <em>right now</em>.</td>
+          <td style="padding:7px 10px;font-weight:600;white-space:nowrap;">M2 — Current pace <span style="background:#FEF3C7;color:#92400E;padding:1px 6px;border-radius:4px;font-size:10px;">FALLBACK</span></td>
+          <td style="padding:7px 10px;"><strong>(review_count &divide; span_days) &times; 30 &times; 7.</strong> Scrapes up to 20 review pages (5-month window). Variable span: fast shops = 10-day window, slow shops = 60-day window — extrapolating back to 30 days introduces inconsistency. Used for Trend and Confidence cross-validation. Falls back to M1 if too few reviews scraped.</td>
         </tr>
         <tr style="background:#F3F4F6;">
-          <td style="padding:7px 10px;font-weight:600;white-space:nowrap;">Headline (Est/mo)</td>
-          <td style="padding:7px 10px;">Priority order: <strong>M2 &rarr; M1.</strong> M2 used first (most current). Falls back to M1 if too few reviews were scraped.</td>
+          <td style="padding:7px 10px;font-weight:600;white-space:nowrap;">M1 — Lifetime avg <span style="background:#F3F4F6;color:#6B7280;padding:1px 6px;border-radius:4px;font-size:10px;border:1px solid #D1D5DB;">LAST RESORT</span></td>
+          <td style="padding:7px 10px;"><strong>total_sales &divide; months_active.</strong> Scraped from the shop page. Stable but lags &mdash; a fast-growing shop will look underestimated here.</td>
         </tr>
       </table>
 
       <p style="margin:14px 0 6px;font-size:12px;font-weight:600;color:#374151;">Trend &mdash; is the shop accelerating or slowing down?</p>
-      <p style="margin:0 0 8px;font-size:12px;color:#6B7280;">Formula: <strong>M2 &divide; M1</strong>. Compares current pace to lifetime average.</p>
+      <p style="margin:0 0 8px;font-size:12px;color:#6B7280;">Formula: <strong>M2 &divide; M1</strong>. Compares M2 (variable-span review rate) to lifetime average. Note: M2 is used here, not velocity &mdash; M2&rsquo;s variable span is actually useful for trend direction even if the absolute number is imprecise.</p>
       <table style="border-collapse:collapse;width:100%;font-size:12px;">
         <tr>
           <td style="padding:7px 10px;font-weight:600;white-space:nowrap;width:170px;"><span style="background:#D1FAE5;color:#065F46;padding:2px 9px;border-radius:999px;">↑ Growing</span></td>
