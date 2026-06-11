@@ -2274,20 +2274,20 @@ render();
         </tr>
       </table>
 
-      <p style="margin:14px 0 6px;font-size:12px;font-weight:600;color:#374151;">Trend &mdash; is the shop accelerating or slowing down?</p>
-      <p style="margin:0 0 8px;font-size:12px;color:#6B7280;">Formula: <strong>M2 &divide; M1</strong>. Compares M2 (variable-span review rate) to lifetime average. Note: M2 is used here, not velocity &mdash; M2&rsquo;s variable span is actually useful for trend direction even if the absolute number is imprecise.</p>
+      <p style="margin:14px 0 6px;font-size:12px;font-weight:600;color:#374151;">Trend &mdash; this month vs all-time</p>
+      <p style="margin:0 0 8px;font-size:12px;color:#6B7280;">Formula: <strong>velocity est_sales_30d &divide; M1</strong>. Compares this month&rsquo;s sales estimate (fixed 30-day review count &divide; 10%) against the shop&rsquo;s all-time average (total lifetime sales &divide; months active). Tells you whether the shop is currently above or below its historical pace. Contrast with <strong>Momentum</strong> which measures this week vs this month.</p>
       <table style="border-collapse:collapse;width:100%;font-size:12px;">
         <tr>
           <td style="padding:7px 10px;font-weight:600;white-space:nowrap;width:170px;"><span style="background:#D1FAE5;color:#065F46;padding:2px 9px;border-radius:999px;">↑ Growing</span></td>
-          <td style="padding:7px 10px;">M2 &divide; M1 &ge; 1.3 &mdash; selling 30%+ faster than lifetime average. Accelerating.</td>
+          <td style="padding:7px 10px;">This month &ge; 1.3&times; lifetime average &mdash; selling 30%+ above historical pace.</td>
         </tr>
         <tr style="background:#F3F4F6;">
           <td style="padding:7px 10px;font-weight:600;white-space:nowrap;"><span style="background:#DBEAFE;color:#1E40AF;padding:2px 9px;border-radius:999px;">→ Stable</span></td>
-          <td style="padding:7px 10px;">M2 &divide; M1 between 0.6 and 1.3 &mdash; current pace matches historical average.</td>
+          <td style="padding:7px 10px;">This month is within 0.6&ndash;1.3&times; lifetime average &mdash; tracking historical pace.</td>
         </tr>
         <tr>
           <td style="padding:7px 10px;font-weight:600;white-space:nowrap;"><span style="background:#FEE2E2;color:#B91C1C;padding:2px 9px;border-radius:999px;">↓ Declining</span></td>
-          <td style="padding:7px 10px;">M2 &divide; M1 &le; 0.6 &mdash; selling 40%+ slower than lifetime average. Slowing down.</td>
+          <td style="padding:7px 10px;">This month &le; 0.6&times; lifetime average &mdash; selling 40%+ below historical pace.</td>
         </tr>
         <tr style="background:#F3F4F6;">
           <td style="padding:7px 10px;font-weight:600;white-space:nowrap;"><span style="background:#F3F4F6;color:#6B7280;padding:2px 9px;border-radius:999px;border:1px solid #D1D5DB;">– Unknown</span></td>
