@@ -545,7 +545,7 @@ def main():
         print(f'  - ID {ex["id"]}: {ex["title"]}')
     print()
     print('[FILL IN: one sentence on what personalization tier dominates and what it means for your product strategy]')
-    print('[FILL IN: one sentence on whether name-only or photo-required listings have higher EMS in this niche]')
+    print('[FILL IN: one sentence on whether name-only or photo-required listings have higher reviews in this niche]')
 
     # ── FPR Stats ─────────────────────────────────────────────────────────────
     print(section_header('FPR Stats', 'paste into market-insights.md Section 5 / Section 8'))
@@ -591,7 +591,7 @@ def main():
     cs = compute_color_strategy(entries)
 
     print('**Top 5 listings by reviews — blank and color count**')
-    print('(Use reviews rank as proxy for EMS; replace EMS column manually if eRank data available)')
+    print('(Reviews = ranking proxy. No EMS available — listing creation date not scraped.)')
     print()
     print('| Listing ID | Reviews | Blank | Color count |')
     print('|---|---|---|---|')

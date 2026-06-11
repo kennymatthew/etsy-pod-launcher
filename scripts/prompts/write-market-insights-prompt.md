@@ -21,7 +21,7 @@ Read the following files before writing anything:
 6. Color Strategy
 7. Demand Signals Summary
 8. Listings to Watch (favorites_per_review > 5.0)
-9. Legacy Listings (reviews_per_month < 2)
+9. Legacy Listings (reviews < 20 — low social proof)
 10. Recommended Mockup Style
 11. Niche Trend Keywords (stub table — fill in after Phase 1.4 eRank)
 12. Appendix — Data Quality Notes
@@ -45,7 +45,7 @@ The HTML renderer converts backtick-wrapped tags to color-coded dots. Without ba
 
 **NEVER recalculate a number from competitors.json yourself.** AI arithmetic on raw JSON is unreliable and has caused hallucinated claims tagged `[our data]` in past audits.
 
-- Run `generate-niche-verdict.py --niche <niche>` first. It outputs pre-computed blocks for: Niche Verdict, Personalization Types, Price Table, Print Methods, Blank Distribution, FPR Stats, RPM Percentiles, Top 10 Reference.
+- Run `generate-niche-verdict.py --niche <niche>` first. It outputs pre-computed blocks for: Niche Verdict, Personalization Types, Price Table, Print Methods, Blank Distribution, FPR Stats, Reviews Percentiles, Color Strategy, Top 10 Reference.
 - Paste each pre-computed block verbatim into the matching section. Do not change any number in a pre-computed block.
 - `[FILL IN]` placeholder sentences are the only lines you write yourself. These are interpretation only — they must be tagged `[inferred]` or `[market knowledge]`, **never `[our data]`**.
 

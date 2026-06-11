@@ -1891,23 +1891,8 @@ render();
       <p style="margin:14px 0 8px;font-size:13px;font-weight:700;color:#111;">📋 Listing-level  <span style="font-weight:400;font-size:12px;color:#6B7280;">(🔍 Competitor Report tab)</span></p>
       <table style="border-collapse:collapse;width:100%;font-size:12px;">
         <tr style="background:#F3F4F6;">
-          <td style="padding:7px 10px;font-weight:600;white-space:nowrap;width:170px;">reviews_per_month</td>
-          <td style="padding:7px 10px;">Total reviews &divide; months since oldest visible review date (min 1 month). Lifetime review velocity &mdash; not the current month alone.</td>
-        </tr>
-        <tr>
-          <td style="padding:7px 10px;font-weight:600;white-space:nowrap;">estimated_monthly_sales</td>
-          <td style="padding:7px 10px;">reviews_per_month &times; 7. The 1:7 ratio (1 review &asymp; 7 sales) is the standard POD apparel estimate &mdash; same formula used by eRank, Alura, Sale Samurai. <strong>Accuracy: &plusmn;20&ndash;30%.</strong> Use for ranking and comparison only. Non-apparel ratios: handmade &asymp; 1:4, digital &asymp; 1:15.</td>
-        </tr>
-        <tr style="background:#F3F4F6;">
           <td style="padding:7px 10px;font-weight:600;white-space:nowrap;">favorites_per_review</td>
           <td style="padding:7px 10px;">favorites_count &divide; reviews. &nbsp;<strong>&gt;5.0</strong> = high saves, low conversion (people browse but don&rsquo;t buy) &nbsp;&middot;&nbsp; <strong>1&ndash;5</strong> = healthy active listing &nbsp;&middot;&nbsp; <strong>&lt;1.0</strong> = legacy listing, interest fading.</td>
-        </tr>
-        <tr>
-          <td style="padding:7px 10px;font-weight:600;white-space:nowrap;">velocity badge</td>
-          <td style="padding:7px 10px;">
-            <span style="background:#D1FAE5;color:#065F46;padding:1px 7px;border-radius:4px;font-size:11px;font-weight:600;">high velocity</span>&nbsp; reviews_per_month &gt; 20 &nbsp;&nbsp;
-            <span style="background:#FEF3C7;color:#92400E;padding:1px 7px;border-radius:4px;font-size:11px;font-weight:600;">legacy</span>&nbsp; reviews_per_month &lt; 2 &mdash; avoid using as a keyword or pricing benchmark.
-          </td>
         </tr>
       </table>
 
