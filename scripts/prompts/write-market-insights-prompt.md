@@ -6,7 +6,7 @@
 ---
 
 Read the following files before writing anything:
-- `01-research/competitors.json` — full dataset; sort by `estimated_monthly_sales` descending before analysis
+- `01-research/competitors.json` — full dataset; sort by `reviews` descending before analysis (EMS/RPM fields are always null — listing creation date is not available)
 - `01-research/keywords.md` — trend direction for Niche Verdict demand adjustment (if file exists)
 
 ---
@@ -77,7 +77,7 @@ If a section has no pre-computed block and requires a count, write `[FILL IN —
 
 Use `[our data]` when the claim is:
 - A count, percentage, or measurement calculated from competitors.json or keywords.md
-- A specific listing ID, EMS, RPM, price, review count, favorites count, or blank name from the data
+- A specific listing ID, price, review count, favorites count, or blank name from the data
 - A ranking or ordering derived from the data
 
 Use `[inferred]` when the claim is:

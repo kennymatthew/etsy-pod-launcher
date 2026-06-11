@@ -313,7 +313,7 @@ def parse_structured(content, listing_id, creation_date=None):
     # Priority order matches Etsy's own display hierarchy.
     if re.search(r'(?m)^Bestseller\s*$', content, re.IGNORECASE):
         result['badge'] = 'Bestseller'
-    elif re.search(r"Etsy['']?s?\s*Pick", content, re.IGNORECASE):
+    elif re.search(r"Etsy['’]?s?\s*Pick", content, re.IGNORECASE):
         result['badge'] = "Etsy's Pick"
     elif re.search(r'\bPopular\s+Now\b', content, re.IGNORECASE):
         result['badge'] = 'Popular Now'

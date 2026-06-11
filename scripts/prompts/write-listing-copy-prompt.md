@@ -6,7 +6,7 @@
 ---
 
 Read the following files before writing anything:
-- `01-research/competitors.json` — extract top 5 listings by `estimated_monthly_sales`; note their exact titles and key_phrases
+- `01-research/competitors.json` — extract top 5 listings by `reviews` (EMS/RPM fields are always null); note their exact titles and key_phrases
 - `01-research/keywords.md` — use the keywords with highest search volume as primary targets; note any with Trend: Rising as priority
 - `01-research/market-insights.md` — read the Niche Verdict, Price Range, and Personalization Types sections
 - `02-design/brief.md` — read the Lock block (blank, blueprint, print provider, list price) and the design direction

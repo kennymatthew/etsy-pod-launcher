@@ -10,10 +10,7 @@
 Read all `etsy-listing-*.md` files listed in `scrapes/manifest.json` and produce a
 `competitors.json` array. Each entry must follow the schema below exactly.
 
-**Before extracting:** check if `scrapes/listing-dates.json` exists. If it does, read it — it maps
-listing IDs to `original_creation_date` (YYYY-MM-DD from Etsy API). Use this date as the listing
-age anchor for `reviews_per_month` calculations. If the file doesn't exist or a listing ID isn't
-in it, fall back to `oldest_visible_review_date` from the scrape.
+**Note:** `reviews_per_month` and `estimated_monthly_sales` are always set to `null` — listing creation date is not available, so velocity cannot be computed. Use `reviews` as the ranking proxy everywhere.
 
 ## Schema
 
@@ -46,8 +43,8 @@ in it, fall back to `oldest_visible_review_date` from the scrape.
   "favorites_count":      "integer — extract from '[X favorites]' link near the top of the listing. Set to 0 if not found.",
   "most_recent_review_date": "string YYYY-MM-DD — date of the first (most recent) review after '## Reviews for this item'. Format 'Jun 2, 2026' → '2026-06-02'. Set to null if no reviews.",
   "oldest_visible_review_date": "string YYYY-MM-DD — date of the last (oldest) review visible in the reviews section. Set to null if no reviews.",
-  "reviews_per_month":    "float — calculated. If reviews is 0, set to 0. months_active = full months from creation anchor to today (minimum 1), where creation anchor = listing-dates.json value for this ID if available, else oldest_visible_review_date. reviews_per_month = reviews ÷ months_active, rounded to 1 decimal.",
-  "estimated_monthly_sales": "integer — calculated. reviews_per_month × 7, rounded to nearest whole number. This is a directional estimate only — do not treat as exact. Set to 0 if reviews_per_month is 0.",
+  "reviews_per_month":    "null — always set to null. Listing creation date is not available.",
+  "estimated_monthly_sales": "null — always set to null. Depends on reviews_per_month which requires listing creation date.",
   "favorites_per_review": "float — calculated. favorites_count ÷ reviews, rounded to 1 decimal. Set to null if reviews is 0. Signal: above 5.0 = high interest / possible conversion problem; 1.0–5.0 = healthy active listing; below 1.0 = legacy listing with declining interest."
 }
 ```
@@ -191,9 +188,7 @@ Before returning the JSON, verify:
 4. **Shirt count**: report at the end how many listings have `is_shirt: true`.
    If < 10% are shirts and the query was shirt-specific, flag it.
 
-5. **Velocity check**: report how many listings have `reviews_per_month` above 20 (high velocity)
-   and how many are below 2 (likely legacy). If more than half of all scraped listings are below 2
-   reviews/month, flag it — the niche may be declining or oversaturated.
+5. **Velocity check**: skip — `reviews_per_month` is always null (listing creation date not available). Use reviews count as a ranking proxy instead.
 
 6. **Cross-listing data leakage** (copy-paste between entries — most common AI extraction error):
    - Are any two entries with different `shop_name` values sharing the same `image_url`? → re-read both scrape files and correct.
@@ -201,9 +196,7 @@ Before returning the JSON, verify:
    - For every entry: does the `id` appear inside the `url` string (e.g. `/listing/1724644210/`)? If not, the fields were likely mixed between entries — re-read.
 
 7. **Arithmetic consistency** (recompute; do not trust your own prior calculation):
-   - For every entry: verify `estimated_monthly_sales == round(reviews_per_month × 7)`. Flag any mismatch.
    - For every entry with reviews > 0: verify `favorites_per_review == round(favorites_count / reviews, 1)`. Flag any mismatch.
-   - For every entry: verify `reviews_per_month <= reviews` (months_active is always ≥ 1, so reviews_per_month can never exceed reviews). Flag any violation.
 
 8. **Date sanity**:
    - For every entry: `oldest_visible_review_date` must be ≤ `most_recent_review_date`. If oldest is more recent, the dates are swapped — correct them.
@@ -227,10 +220,9 @@ Before returning the JSON, verify:
 
 When writing or updating `market-insights.md` after `competitors.json` is built, follow the locked prompt at `scripts/prompts/write-market-insights-prompt.md`. Key rules summarised here:
 
-- Sort listings by `estimated_monthly_sales` descending. The top 3 are **benchmark listings** — name them explicitly with their estimated monthly sales figure.
+- Sort listings by `reviews` descending (EMS/RPM are always null — listing creation date not available). The top 3 are **benchmark listings** — name them explicitly with their review count.
 - Flag any listing with `favorites_per_review` above 5.0 as **high-interest / possible conversion gap** (buyers save but don't purchase — usually a price or trust issue worth noting).
-- Flag any listing with `reviews_per_month` below 2 as a **legacy listing** — do not use as a pricing or keyword benchmark.
-- Add a section called **Recommended Mockup Style**: report the most frequent `mockup_style` among the top 5 listings by `estimated_monthly_sales`. If there is a tie, list both. If the majority are `unknown`, note that the data is insufficient and recommend checking eRank Listing View manually. This becomes the default for slot 1 (main listing photo) in Phase 3.
+- Add a section called **Recommended Mockup Style**: report the most frequent `mockup_style` among the top 5 listings by `reviews`. If there is a tie, list both. If the majority are `unknown`, note that the data is insufficient and recommend checking eRank Listing View manually. This becomes the default for slot 1 (main listing photo) in Phase 3.
 
 **Source tagging — mandatory for every sentence:**
 Every claim must end with a backtick-wrapped source tag. The HTML renderer requires backticks — tags without them render as plain text and the color dots do not appear.
@@ -253,18 +245,13 @@ After building competitors.json, write the Niche Verdict block and add it to the
 ## Niche Verdict [REQUIRED]
 
 **Demand signal:** [High / Medium / Low]
-Basis: [one sentence — reference estimated_monthly_sales of top 3 listings by that field,
-whether Bestseller badges were found (is_bestseller count), and in_carts signals found.
-Then apply trend adjustment from keywords.md: Rising → upgrade one level, Declining →
-downgrade one level, Seasonal → note peak month, Unknown → leave unadjusted and note the gap.]
+Basis: [one sentence — reference review counts of top 3 listings, whether Bestseller badges were found (is_bestseller count), and in_carts signals found. Then apply trend adjustment from keywords.md: Rising → upgrade one level, Declining → downgrade one level, Seasonal → note peak month, Unknown → leave unadjusted and note the gap.]
 
 **Competition barrier:** [High / Medium / Low]
-Basis: [one sentence — what proportion of scraped listings have reviews_per_month above 10?
-Majority = High barrier. Minority = Low barrier.]
+Basis: [one sentence — what proportion of scraped listings have reviews above 500? Majority = High barrier. Minority = Low barrier.]
 
-**15/month check:** [Pass / Fail]
-Basis: [do at least 3 of the top 5 listings by estimated_monthly_sales show 15+
-estimated monthly sales? Pass = yes. Fail = no. Name the 5 listings and their values.]
+**15/month check:** [N/A — EMS unavailable]
+Basis: [EMS/RPM cannot be computed without listing creation date. Report the review counts of the top 5 listings instead and note whether demand signals (Bestseller, in_carts) are present.]
 
 **Recommendation:** [Enter / Enter with sub-niche pivot / Do not enter]
 Reasoning: [one sentence combining all three signals above]

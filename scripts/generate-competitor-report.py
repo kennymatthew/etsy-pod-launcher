@@ -48,10 +48,10 @@ def assign_pattern(entry, patterns):
     return fallback
 
 
-def dp_ems_color(ems):
-    if ems is None: return '#9ca3af'
-    if ems >= 100:  return '#16a34a'
-    if ems >= 15:   return '#d97706'
+def dp_ems_color(reviews):
+    if reviews is None: return '#9ca3af'
+    if reviews >= 500:  return '#16a34a'
+    if reviews >= 100:  return '#d97706'
     return '#9ca3af'
 
 
@@ -122,7 +122,7 @@ def update_demand_signals_in_md(md_text, comp_data, patterns_config):
     in_carts_null = sum(1 for e in comp_data if e.get('in_carts') is None)
 
     pick_shops = ', '.join(
-        f"{e.get('shop_name')} (EMS {e.get('estimated_monthly_sales')})"
+        f"{e.get('shop_name')} ({e.get('reviews') or 0} reviews)"
         for e in comp_data if e.get('badge') == "Etsy's Pick"
     )
 
@@ -152,14 +152,14 @@ def update_demand_signals_in_md(md_text, comp_data, patterns_config):
 
     pattern_rows = []
     for pid, entries in sorted(groups.items(), key=lambda kv: -sum(
-            (e.get('estimated_monthly_sales') or 0) for e in kv[1]) / max(len(kv[1]), 1)):
+            (e.get('reviews') or 0) for e in kv[1]) / max(len(kv[1]), 1)):
         pn = len(entries)
         pbs   = sum(1 for e in entries if e.get('is_bestseller'))
         pc    = sum(1 for e in entries if (e.get('in_carts') or 0) > 0)
         pc20  = sum(1 for e in entries if (e.get('in_carts') or 0) >= 20)
-        pems  = round(sum((e.get('estimated_monthly_sales') or 0) for e in entries) / pn)
+        pavg_reviews = round(sum((e.get('reviews') or 0) for e in entries) / pn)
         label = plabel.get(pid, pid)
-        pattern_rows.append(f'| {label} | {pn} | {pbs}/{pn} | {pc}/{pn} | {pc20}/{pn} | {pems} |')
+        pattern_rows.append(f'| {label} | {pn} | {pbs}/{pn} | {pc}/{pn} | {pc20}/{pn} | {pavg_reviews} |')
 
     # ── Find existing interpretation slots ────────────────────────────────────
     start = md_text.find('\n## 6. Demand Signals Summary')
@@ -220,7 +220,7 @@ def update_demand_signals_in_md(md_text, comp_data, patterns_config):
 
 ### Demand by Pattern Segment
 
-| Pattern | Listings | Bestseller | Carts > 0 | Carts 20+ | Avg EMS |
+| Pattern | Listings | Bestseller | Carts > 0 | Carts 20+ | Avg Reviews |
 |---|---|---|---|---|---|
 {chr(10).join(pattern_rows)}
 
@@ -246,7 +246,7 @@ def build_design_patterns_section(comp_data, config):
         if e.get('image_url'):
             groups[assign_pattern(e, patterns)].append(e)
     for k in groups:
-        groups[k].sort(key=lambda e: e.get('estimated_monthly_sales') or 0, reverse=True)
+        groups[k].sort(key=lambda e: e.get('reviews') or 0, reverse=True)
 
     total     = sum(len(v) for v in groups.values())
     n_patterns = len([p for p in patterns if p['id'] != 'P0'])
@@ -269,9 +269,9 @@ def build_design_patterns_section(comp_data, config):
                 title = escape_html((e.get('title') or '')[:120])
                 reviews = e.get('reviews') or 0
                 price   = escape_html(e.get('price') or '')
-                ems     = e.get('estimated_monthly_sales')
-                ems_bg  = dp_ems_color(ems)
-                ems_label = f'EMS {ems}' if ems is not None else 'EMS —'
+                reviews_val = e.get('reviews') or 0
+                ems_bg  = dp_ems_color(reviews_val if reviews_val > 0 else None)
+                ems_label = f'{reviews_val:,} reviews' if reviews_val else 'No reviews'
                 is_best   = e.get('is_bestseller', False)
                 best_badge = '<span class="dp-badge-best">&#9733; Best</span>' if is_best else ''
                 ems_badge  = f'<span class="dp-badge-ems" style="background:{ems_bg}">{ems_label}</span>'
@@ -355,7 +355,7 @@ def build_garment_blanks_section(comp_data):
         f'<span class="src-tag src-our-data" title="[our data]">[our data]</span> '
         f'Sellers sometimes name a blank in their listing title for SEO purposes even if the product ships on a different blank. '
         f'<span class="src-tag src-market" title="[market knowledge]">[market knowledge]</span></p>'
-        f'<p class="mi-p"><strong>Comfort Colors dominance:</strong> {cc_total}/{total} listings ({cc_pct}%) reference Comfort Colors, including all three top-EMS listings. '
+        f'<p class="mi-p"><strong>Comfort Colors dominance:</strong> {cc_total}/{total} listings ({cc_pct}%) reference Comfort Colors. '
         f'<span class="src-tag src-our-data" title="[our data]">[our data]</span> '
         f'Comfort Colors garment-dyed blanks are broadly favored in POD apparel niches for their vintage aesthetic — this niche confirms that pattern. '
         f'<span class="src-tag src-market" title="[market knowledge]">[market knowledge]</span></p>'
@@ -527,12 +527,12 @@ def build_listing_pricing_strategy_section(comp_data):
         real_mins_all = [e.get('price_real_min') for e in comp_data if e.get('price_real_min') is not None]
         denom = len(real_mins_all) if real_mins_all else 1
         pct = round(count / denom * 100)
-        ems_vals = [e.get('estimated_monthly_sales') for e in items if e.get('estimated_monthly_sales') is not None]
-        avg_ems = round(statistics.mean(ems_vals)) if ems_vals else None
+        reviews_vals = [e.get('reviews') for e in items if e.get('reviews') is not None]
+        avg_ems = round(statistics.mean(reviews_vals)) if reviews_vals else None
         if avg_ems is not None and avg_ems > best_band_ems:
             best_band_ems = avg_ems
             best_band_label = label
-        best_e = max(items, key=lambda e: e.get('estimated_monthly_sales') or 0)
+        best_e = max(items, key=lambda e: e.get('reviews') or 0)
         example_url = best_e.get('url', '')
         avg_ems_str = str(avg_ems) if avg_ems is not None else '—'
         link = f'<a href="{example_url}" target="_blank">View →</a>' if example_url else '—'
@@ -552,7 +552,7 @@ def build_listing_pricing_strategy_section(comp_data):
         '<th>Price Band</th>'
         '<th style="text-align:right">Sellers</th>'
         '<th style="text-align:right">%</th>'
-        '<th style="text-align:right">Avg EMS</th>'
+        '<th style="text-align:right">Avg Reviews</th>'
         '<th>Best Example</th>'
         '</tr></thead>'
         '<tbody>' + band_rows_html + '</tbody>'
@@ -561,31 +561,31 @@ def build_listing_pricing_strategy_section(comp_data):
 
     # Qualitative insight for price bands
     premium_items = band_groups.get('$28+', [])
-    premium_ems_vals = [e.get('estimated_monthly_sales') for e in premium_items if e.get('estimated_monthly_sales') is not None]
+    premium_ems_vals = [e.get('reviews') for e in premium_items if e.get('reviews') is not None]
     premium_avg_ems = round(statistics.mean(premium_ems_vals)) if premium_ems_vals else None
     premium_count = len(premium_items)
 
     if best_band_label:
         if best_band_label == '$28+':
             band_insight = (
-                f'The <strong>{best_band_label}</strong> band has the highest average monthly sales (EMS {best_band_ems}), '
+                f'The <strong>{best_band_label}</strong> band has the highest avg reviews ({best_band_ems}), '
                 f'suggesting buyers in this niche will pay a premium for perceived quality or personalization.'
             )
         elif best_band_label in ('Under $14', '$14–$20'):
             band_insight = (
-                f'The <strong>{best_band_label}</strong> band has the highest average monthly sales (EMS {best_band_ems}), '
+                f'The <strong>{best_band_label}</strong> band has the highest avg reviews ({best_band_ems}), '
                 f'suggesting buyers in this niche are price-sensitive — volume comes from accessible price points.'
             )
         else:
             band_insight = (
-                f'The <strong>{best_band_label}</strong> band has the highest average monthly sales (EMS {best_band_ems}), '
+                f'The <strong>{best_band_label}</strong> band has the highest avg reviews ({best_band_ems}), '
                 f'suggesting the sweet spot is mid-range pricing — not cheap enough to signal low quality, '
                 f'not expensive enough to lose impulse buyers.'
             )
         if premium_avg_ems is not None:
             band_insight += (
                 f' Only {premium_count} seller{"s" if premium_count != 1 else ""} operate above $28, '
-                f'averaging EMS {premium_avg_ems} — {"a viable premium tier exists" if premium_avg_ems > best_band_ems * 0.7 else "premium positioning is difficult in this niche"}.'
+                f'averaging {premium_avg_ems} reviews — {"a viable premium tier exists" if premium_avg_ems > best_band_ems * 0.7 else "premium positioning is difficult in this niche"}.'
             )
     else:
         band_insight = 'Insufficient price_real_min data to draw conclusions about price bands.'
@@ -659,9 +659,9 @@ def build_listing_pricing_strategy_section(comp_data):
         label = ANCHOR_LABELS.get(key, key.replace('_', ' ').title())
         count = len(items)
         pct = round(count / total * 100)
-        ems_vals = [e.get('estimated_monthly_sales') for e in items if e.get('estimated_monthly_sales') is not None]
+        ems_vals = [e.get('reviews') for e in items if e.get('reviews') is not None]
         avg_ems = round(statistics.mean(ems_vals)) if ems_vals else None
-        best_e = max(items, key=lambda e: e.get('estimated_monthly_sales') or 0)
+        best_e = max(items, key=lambda e: e.get('reviews') or 0)
         example_url = best_e.get('url', '')
         anchor_rows_data.append((label, count, pct, avg_ems, example_url, key))
 
@@ -687,7 +687,7 @@ def build_listing_pricing_strategy_section(comp_data):
         '<th>Strategy</th>'
         '<th style="text-align:right">Count</th>'
         '<th style="text-align:right">% of listings</th>'
-        '<th style="text-align:right">Avg EMS</th>'
+        '<th style="text-align:right">Avg Reviews</th>'
         '<th>Example</th>'
         '</tr></thead>'
         '<tbody>' + anchor_rows_html + '</tbody>'
@@ -696,7 +696,7 @@ def build_listing_pricing_strategy_section(comp_data):
 
     # Qualitative anchor insight
     honest_items = anchor_groups.get('honest', [])
-    honest_ems_vals = [e.get('estimated_monthly_sales') for e in honest_items if e.get('estimated_monthly_sales') is not None]
+    honest_ems_vals = [e.get('reviews') for e in honest_items if e.get('reviews') is not None]
     honest_avg_ems = round(statistics.mean(honest_ems_vals)) if honest_ems_vals else None
 
     # Find dominant anchor type (excluding honest)
@@ -706,19 +706,19 @@ def build_listing_pricing_strategy_section(comp_data):
         if honest_avg_ems is not None and dom_ems is not None:
             ratio = dom_ems / honest_avg_ems if honest_avg_ems > 0 else 1
             if ratio >= 1.15:
-                ems_comparison = f'is {round((ratio-1)*100)}% higher than honest listings (avg EMS {honest_avg_ems}). This suggests the lower displayed price drives meaningful click-through advantages'
+                ems_comparison = f'is {round((ratio-1)*100)}% higher than honest listings (avg {honest_avg_ems} reviews). This suggests the lower displayed price drives meaningful click-through advantages'
             elif ratio <= 0.87:
-                ems_comparison = f'is {round((1-ratio)*100)}% lower than honest listings (avg EMS {honest_avg_ems}). The data suggests anchoring does not guarantee higher volume — design and reviews matter more'
+                ems_comparison = f'is {round((1-ratio)*100)}% lower than honest listings (avg {honest_avg_ems} reviews). The data suggests anchoring does not guarantee higher volume — design and reviews matter more'
             else:
-                ems_comparison = f'is similar to honest listings (avg EMS {honest_avg_ems}). The data does not show a clear EMS advantage from anchoring — quality and design matter more than the search price'
+                ems_comparison = f'is similar to honest listings (avg {honest_avg_ems} reviews). The data does not show a clear advantage from anchoring — quality and design matter more than the search price'
             anchor_insight = (
                 f'{escape_html(dom_label)} {"is" if dom_count == 1 else "are"} the dominant strategy '
-                f'({dom_pct}% of listings), and their avg EMS of {dom_ems} {ems_comparison}.'
+                f'({dom_pct}% of listings), and their avg reviews of {dom_ems} {ems_comparison}.'
             )
         elif dom_ems is not None:
             anchor_insight = (
                 f'{escape_html(dom_label)} {"is" if dom_count == 1 else "are"} the dominant strategy '
-                f'({dom_pct}% of listings) with avg EMS {dom_ems}.'
+                f'({dom_pct}% of listings) with avg {dom_ems} reviews.'
             )
         else:
             anchor_insight = (
@@ -808,7 +808,7 @@ def build_listing_pricing_strategy_section(comp_data):
                     if pt and isinstance(pt, list) and set(pt) == parts_set:
                         candidates.append(e)
                 if candidates:
-                    best = max(candidates, key=lambda e: e.get('estimated_monthly_sales') or 0)
+                    best = max(candidates, key=lambda e: e.get('reviews') or 0)
                     combo_to_listing[combo_key] = best
 
             example_cells = ''
@@ -820,8 +820,8 @@ def build_listing_pricing_strategy_section(comp_data):
                 img   = ex.get('image_url', '')
                 title = escape_html((ex.get('title') or '')[:80])
                 price = escape_html(ex.get('price') or '')
-                ems   = ex.get('estimated_monthly_sales')
-                ems_label   = f'~{ems}/mo' if ems else 'EMS —'
+                ems   = ex.get('reviews')
+                ems_label   = f'{ems:,} reviews' if ems else '—'
                 combo_label = escape_html(combo_key)
                 example_cells += (
                     f'<div style="display:flex;flex-direction:column;gap:6px;">'
@@ -1012,20 +1012,17 @@ def md_to_html(md_text, lookup=None):
 
 # ── HTML builder ───────────────────────────────────────────────────────────────
 
-def build_top_strip(comp_data, ems_reliable=True):
+def build_top_strip(comp_data, ems_reliable=False):
     """Horizontal scrollable strip of top listings."""
-    sort_key = (lambda e: e.get('estimated_monthly_sales') or 0) if ems_reliable else (lambda e: e.get('reviews') or 0)
     top = sorted(
         [e for e in comp_data if e.get('image_url')],
-        key=sort_key, reverse=True
+        key=lambda e: e.get('reviews') or 0, reverse=True
     )[:8]
     if not top:
         return ''
     cards = ''
     for item in top:
-        if ems_reliable and item.get('estimated_monthly_sales'):
-            meta_left = f'~{item["estimated_monthly_sales"]}/mo est.'
-        elif item.get('reviews'):
+        if item.get('reviews'):
             meta_left = f'{item["reviews"]:,} reviews'
         else:
             meta_left = 'No reviews'
@@ -1057,7 +1054,7 @@ def build_shop_intel_tab(watchlist):
         )
 
     shops = [s for s in watchlist if 'error' not in s]
-    shops.sort(key=lambda s: s.get('estimated_monthly_sales') or 0, reverse=True)
+    shops.sort(key=lambda s: s.get('estimated_monthly_sales') or s.get('method1_lifetime_avg_monthly') or 0, reverse=True)
 
     trend_icon = {'growing': '↑', 'declining': '↓', 'stable': '→', 'unknown': '–'}
     trend_color = {'growing': 'si-trend-up', 'declining': 'si-trend-down', 'stable': 'si-trend-stable', 'unknown': 'si-trend-unknown'}
@@ -1713,8 +1710,7 @@ def build_html(niche, comp_data, insights_md, watchlist, date_str, ems_reliable=
   <button class="filter-btn" onclick="setFilter('novelty',this)">&#127873; Novelty <span id="cnt-novelty"></span></button>
   <span class="visible-count" id="visible-count"></span>
   <select class="sort-select" onchange="setSort(this.value)">
-    <option value="est-sales">{"Sort: Est. Monthly Sales" if ems_reliable else "Sort: Est. Sales (N/A — connect Etsy API)"}</option>
-    <option value="reviews"{"" if ems_reliable else ' selected'}>Most Reviews</option>
+    <option value="reviews" selected>Most Reviews</option>
     <option value="price-asc">Price: Low &rarr; High</option>
     <option value="price-desc">Price: High &rarr; Low</option>
     <option value="rating">Highest Rated</option>
@@ -1739,7 +1735,7 @@ function toggleLabels(btn) {
 }
 
 const DATA = """ + data_json + """;
-let filter = 'shirts', sort = '""" + ('est-sales' if ems_reliable else 'reviews') + """';
+let filter = 'shirts', sort = 'reviews';
 
 function getCategory(e) {
   const pt = (e.product_type||'').toLowerCase();
@@ -1789,8 +1785,7 @@ function card(item) {
   const revBadge = item.reviews > 0
     ? '<div class="reviews-badge"><span class="star">&#9733;</span> ' + item.reviews.toLocaleString() + '</div>' : '';
   const shirtBadge = shirt ? '<div class="shirt-badge">Shirt</div>' : '';
-  const estSales = item.estimated_monthly_sales > 0
-    ? '<span class="est-sales-badge"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:3px;vertical-align:middle"><path d="M1 1h2.5l1.8 8.5h7.4l1.8-5.5H4.5"/><circle cx="6.5" cy="13" r="1.2"/><circle cx="11.5" cy="13" r="1.2"/></svg>~' + item.estimated_monthly_sales + ' sales/mo</span>' : '';
+  const estSales = '';
   const favBadge = (item.favorites_count || 0) > 0
     ? '<span class="fav-badge">&#9829; ' + item.favorites_count.toLocaleString() + ' favorites</span>' : '';
   const revLine = item.reviews > 0
@@ -1833,8 +1828,7 @@ function card(item) {
 
 function render() {
   let items = [...DATA];
-  if (sort==='est-sales') items.sort((a,b)=>(b.estimated_monthly_sales||0)-(a.estimated_monthly_sales||0));
-  else if (sort==='reviews') items.sort((a,b)=>b.reviews-a.reviews);
+  if (sort==='reviews') items.sort((a,b)=>b.reviews-a.reviews);
   else if (sort==='price-asc') items.sort((a,b)=>parsePrice(a.price)-parsePrice(b.price));
   else if (sort==='price-desc') items.sort((a,b)=>parsePrice(b.price)-parsePrice(a.price));
   else if (sort==='rating') items.sort((a,b)=>(b.rating||0)-(a.rating||0));
@@ -2019,11 +2013,6 @@ def main():
     date_str        = datetime.date.today().isoformat()
 
     ems_reliable = False
-    if dates_path.exists():
-        dates_data = json.loads(dates_path.read_text())
-        ems_reliable = bool(dates_data)
-    if not ems_reliable:
-        print('  ⚠ listing-dates.json missing or empty — EMS/RPM will show as N/A. Connect Etsy API to fix.')
 
     html = build_html(args.niche, comp_data, insights_md, watchlist, date_str, ems_reliable, patterns_config)
     out_path.write_text(html)

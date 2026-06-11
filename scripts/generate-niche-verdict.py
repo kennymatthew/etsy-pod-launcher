@@ -292,6 +292,63 @@ def compute_reviews_percentiles(entries):
     }
 
 
+def compute_color_strategy(entries):
+    """
+    Compute all color strategy data deterministically from competitors.json.
+    Returns:
+      - top5_by_reviews: top 5 shirt listings by reviews, with blank + color count
+      - cc_count: number of CC shirt listings
+      - cc_color_freq: list of (color, count, pct) sorted by frequency, top 20
+      - bc_listings: confirmed BC shirt listings with id, color_count, price_real_min
+      - bc_price_min / bc_price_max: actual price range across BC listings
+    """
+    from collections import Counter
+
+    shirts = [e for e in entries if e.get('is_shirt')]
+
+    top5 = sorted(shirts, key=lambda e: e.get('reviews') or 0, reverse=True)[:5]
+
+    cc = [e for e in shirts if norm_blank(e.get('blank')) == 'Comfort Colors']
+    all_cc_colors = []
+    for e in cc:
+        all_cc_colors.extend(e.get('colors') or [])
+    cc_n = len(cc)
+    cc_freq = [
+        (color, count, round(count / cc_n * 100) if cc_n else 0)
+        for color, count in Counter(all_cc_colors).most_common(20)
+    ]
+
+    bc = [e for e in shirts if norm_blank(e.get('blank')) == 'Bella Canvas']
+    bc_prices = [e.get('price_real_min') for e in bc if e.get('price_real_min')]
+
+    return {
+        'top5': [
+            {
+                'id': e.get('id'),
+                'reviews': e.get('reviews') or 0,
+                'blank': norm_blank(e.get('blank')),
+                'color_count': len(e.get('colors') or []),
+            }
+            for e in top5
+        ],
+        'cc_count': cc_n,
+        'cc_color_freq': cc_freq,
+        'bc_listings': sorted(
+            [
+                {
+                    'id': e.get('id'),
+                    'color_count': len(e.get('colors') or []),
+                    'price_real_min': e.get('price_real_min'),
+                }
+                for e in bc
+            ],
+            key=lambda x: -(x.get('price_real_min') or 0),
+        ),
+        'bc_price_min': round(min(bc_prices), 2) if bc_prices else None,
+        'bc_price_max': round(max(bc_prices), 2) if bc_prices else None,
+    }
+
+
 def compute_top_n_reference(entries, n=10):
     """Top N listings by reviews — structured reference for AI writing design patterns."""
     sorted_entries = sorted(entries, key=lambda e: e.get('reviews') or 0, reverse=True)
@@ -528,6 +585,43 @@ def main():
         print(f'| reviews < 20 (low proof) | {rev_pct["reviews_lt_20"]} |')
         print()
         print('[FILL IN: one sentence on what reviews distribution means for competitive intensity]')
+
+    # ── Color Strategy ────────────────────────────────────────────────────────
+    print(section_header('Color Strategy', 'replace Section 5 (Color Strategy) in market-insights.md'))
+    cs = compute_color_strategy(entries)
+
+    print('**Top 5 listings by reviews — blank and color count**')
+    print('(Use reviews rank as proxy for EMS; replace EMS column manually if eRank data available)')
+    print()
+    print('| Listing ID | Reviews | Blank | Color count |')
+    print('|---|---|---|---|')
+    for r in cs['top5']:
+        print(f"| {r['id']} | {r['reviews']:,} | {r['blank']} | {r['color_count']} |")
+    print()
+
+    print(f'**Comfort Colors palette — most common colors across {cs["cc_count"]} CC shirt listings:**')
+    print()
+    print('| Color | Listings | % of CC listings |')
+    print('|---|---|---|')
+    for color, count, pct in cs['cc_color_freq']:
+        print(f'| {color} | {count}/{cs["cc_count"]} | {pct}% |')
+    print()
+
+    if cs['bc_listings']:
+        print(f'**Bella Canvas listings ({len(cs["bc_listings"])} confirmed):**')
+        print()
+        print('| Listing ID | Colors | Price min |')
+        print('|---|---|---|')
+        for r in cs['bc_listings']:
+            price = f"${r['price_real_min']:.2f}" if r['price_real_min'] else 'N/A'
+            print(f"| {r['id']} | {r['color_count']} | {price} |")
+        if cs['bc_price_min'] and cs['bc_price_max']:
+            print(f'\nBC price range: ${cs["bc_price_min"]:.2f}–${cs["bc_price_max"]:.2f}')
+    else:
+        print('No confirmed Bella Canvas listings found.')
+    print()
+    print('[FILL IN: one sentence on recommended palette and color count for your own listing]')
+    print('[AI instruction: do NOT add colors, IDs, or price ranges not shown above — all numbers come from this block]')
 
 
 if __name__ == '__main__':
