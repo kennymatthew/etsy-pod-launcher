@@ -154,10 +154,14 @@ def update_listings_to_watch_in_md(md_text, comp_data):
             carts = r['carts'] if r['carts'] is not None else 'null'
             yrs   = f"{r['years']:.1f}" if r['years'] else '?'
             bs    = '✓' if r['bs'] else '—'
+            title = r['title'].replace('|', '–')  # pipe breaks markdown table cells
+            conf  = r['conf']
+            if r['reviews'] >= 20 and r['years'] and r['years'] <= 1.0:
+                conf += ' ⚡'  # young shop accumulating reviews fast
             rows.append(
-                f"| {i} | {r['id']} | {r['title']} | {r['fpr']} "
+                f"| {i} | {r['id']} | {title} | {r['fpr']} "
                 f"| {r['reviews']} | {r['favorites']:,} | {bs} | {carts} "
-                f"| {r['sales']:,} | {yrs} | {r['conf']} |"
+                f"| {r['sales']:,} | {yrs} | {conf} |"
             )
         return rows
 
@@ -210,7 +214,7 @@ def update_listings_to_watch_in_md(md_text, comp_data):
 
 *(favorites_per_review — high buyer interest relative to review count)*
 
-Shoppers are saving these items faster than they are leaving reviews — signals a newer listing gaining traction, a price above impulse-buy threshold, or a wishlist/gift item. `[market knowledge]` FPR is only reliable when reviews ≥ 20; lower counts are directional only. `[market knowledge]`
+Shoppers are saving these items faster than they are leaving reviews — signals a newer listing gaining traction, a price above impulse-buy threshold, or a wishlist/gift item. `[market knowledge]` FPR is only reliable when reviews ≥ 20; lower counts are directional only. `[market knowledge]` ⚡ = shop under 1 year old with ≥ 20 reviews — high review velocity relative to shop age. `[inferred]`
 
 {tier1_block}
 {tier2_section}

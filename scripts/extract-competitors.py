@@ -300,9 +300,15 @@ def parse_structured(content, listing_id, creation_date=None):
     m = re.search(r'([\d,]+(?:\.\d+)?k?)\s+sales', content, re.IGNORECASE)
     result['shop_sales'] = parse_k_number(m.group(1)) if m else None
 
-    # Shop age in years — Etsy displays "X years on Etsy" or "X.X years on Etsy" or "1 year on Etsy"
-    m = re.search(r'([\d]+(?:\.\d+)?)\s+years?\s+on\s+Etsy', content, re.IGNORECASE)
-    result['shop_years_on_etsy'] = float(m.group(1)) if m else None
+    # Shop age — "X years on Etsy", "X.X years on Etsy", or "X months on Etsy"
+    m_yr = re.search(r'([\d]+(?:\.\d+)?)\s+years?\s+on\s+Etsy', content, re.IGNORECASE)
+    m_mo = re.search(r'([\d]+)\s+months?\s+on\s+Etsy', content, re.IGNORECASE)
+    if m_yr:
+        result['shop_years_on_etsy'] = float(m_yr.group(1))
+    elif m_mo:
+        result['shop_years_on_etsy'] = round(int(m_mo.group(1)) / 12, 2)
+    else:
+        result['shop_years_on_etsy'] = None
 
     # All product listing images — only from before cross-sell noise sections
     img_section = content[:_noise_boundary(content)]
