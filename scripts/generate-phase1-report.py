@@ -368,6 +368,7 @@ def section_who_is_winning(st, shops):
     <thead><tr><th>Shop</th><th>Est. Monthly Sales</th><th>Total Sales</th><th>Trend</th><th>Confidence</th><th>Method cross-check</th></tr></thead>
     <tbody>{shop_rows}</tbody>
   </table>
+  <p style="font-size:12px;color:#6b7280;margin-top:6px;"><em>Note: Trend here is directional only — derived from M2÷M1 in shop-watchlist.json. M2 has a variable scrape window (10–60 days) so the ratio is approximate. For the authoritative velocity-based trend (vel÷M1, fixed 30-day window), see the Shop Intelligence tab in the competitor report.</em></p>
 
   <h3>The Dominant Formula</h3>
   {p("The top 3 shirt listings by reviews all share the same format. `[our data]`")}

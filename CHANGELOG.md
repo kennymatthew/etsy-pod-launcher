@@ -9,6 +9,18 @@ Version numbering:
 
 ---
 
+## [v1.11.0] — 2026-06-12
+
+### Changed
+- **Trend now uses velocity ÷ M1 at report render time** (`generate-competitor-report.py`). Previously, Trend was read directly from `shop-watchlist.json` where it was calculated as M2÷M1. M2 has a variable scrape window (10–60 days depending on shop pace), making it unreliable as an absolute sales number — the same shop could show "declining" or "growing" depending purely on how many review pages were scraped. New formula: `velocity est_sales_30d ÷ M1` (fixed 30-day window ÷ lifetime average). Thresholds unchanged: ≥1.3x Growing · 0.6–1.3x Stable · ≤0.6x Declining. `trend_signal` in the JSON is kept as-is for backward compatibility and cross-validation.
+- Updated Trend column header tooltip to explain the 30d-vs-lifetime frame and contrast with Momentum (this week vs this month).
+- Updated Momentum column header tooltip to clarify it measures this week vs last 30 days and contrast with Trend.
+- Updated si-legend Trend entry to describe vel÷M1 formula, time frame, and contrast with Momentum.
+- **`generate-phase1-report.py`** — added caption note below the shop trend table clarifying that trend shown there is M2-based (directional only) and that the authoritative velocity-based trend is in the competitor report's Shop Intelligence tab.
+- **`research-shops.py`** — added comment explaining that `trend_signal` (M2÷M1) is intentionally kept unchanged and that report-time recalculation happens in `generate-competitor-report.py`.
+
+---
+
 ## [v1.10.0] — 2026-06-12
 
 ### Changed

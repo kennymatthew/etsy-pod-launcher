@@ -317,7 +317,11 @@ def estimate_shop(shop_name, content, review_dates=None):
         result['confidence'] = 'medium'
         notes.append('Only M1 available — M2 skipped (too few review dates)')
 
-    # Trend signal: only meaningful when both M1 and M2 are available
+    # Trend signal: only meaningful when both M1 and M2 are available.
+    # NOTE: This M2÷M1 ratio is kept in the JSON for backward compatibility and
+    # cross-validation only. At report render time, generate-competitor-report.py
+    # recalculates trend using velocity est_sales_30d÷M1 (fixed 30-day window),
+    # which is more reliable. Do NOT change this calculation here.
     if m1 and m2:
         ratio = m2 / m1
         if ratio >= 1.3:

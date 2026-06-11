@@ -1328,6 +1328,24 @@ def build_shop_intel_tab(watchlist, velocity=None):
         return v.get('est_sales_30d') or s.get('estimated_monthly_sales') or s.get('method1_lifetime_avg_monthly') or 0
     shops.sort(key=_sort_key, reverse=True)
 
+    # Recalculate trend at render time using velocity est_sales_30d ÷ M1.
+    # The watchlist trend_signal (M2÷M1) is NOT used here — M2 has a variable scrape
+    # window (10–60d) making it unreliable as an absolute number for trend direction.
+    # Formula: vel est_sales_30d ÷ method1_lifetime_avg_monthly
+    #   ≥ 1.3 → growing | 0.6–1.3 → stable | ≤ 0.6 → declining | either missing → unknown
+    def _compute_trend_vel(shop_entry, vel_entry):
+        vel_est = vel_entry.get('est_sales_30d')
+        m1 = shop_entry.get('method1_lifetime_avg_monthly')
+        if not vel_est or not m1:
+            return 'unknown'
+        ratio = vel_est / m1
+        if ratio >= 1.3:
+            return 'growing'
+        elif ratio <= 0.6:
+            return 'declining'
+        else:
+            return 'stable'
+
     trend_icon  = {'growing': '↑', 'declining': '↓', 'stable': '→', 'unknown': '–'}
     trend_color = {'growing': 'si-trend-up', 'declining': 'si-trend-down', 'stable': 'si-trend-stable', 'unknown': 'si-trend-unknown'}
     conf_color  = {'high': 'si-conf-high', 'medium': 'si-conf-med', 'low': 'si-conf-low'}
@@ -1342,7 +1360,7 @@ def build_shop_intel_tab(watchlist, velocity=None):
         vel         = vel_map.get(name, {})
         vel_est     = vel.get('est_sales_30d')
         headline    = vel_est or m2 or m1 or '—'
-        trend       = s.get('trend_signal') or 'unknown'
+        trend       = _compute_trend_vel(s, vel)  # velocity-based: vel÷M1 (not M2÷M1)
         conf        = s.get('confidence') or 'low'
         total_sales = s.get('total_sales')
         total_str   = f'{total_sales:,}' if total_sales else '—'
@@ -1404,8 +1422,8 @@ def build_shop_intel_tab(watchlist, velocity=None):
         '<th title="M1 Lifetime avg: total Etsy lifetime sales ÷ months active. Historical average — not current pace. May use \'X years on Etsy\' as approximation if exact open date unavailable (flagged as relative).">M1 Lifetime</th>'
         '<th title="M2 Current pace: review rate over 5-month window × 30 × 7. Best signal for recent momentum. Hover cell for window detail.">M2 Current</th>'
         '<th title="Reviews left in the last 7 days. Confirms shop is actively selling this week.">7d Reviews</th>'
-        '<th title="Momentum: 7d reviews ÷ (30d reviews ÷ 4). 1.0x = flat pace. Above 1.0x = accelerating vs 30d baseline; below = slowing. Note: 7d window is included in the 30d count, so true acceleration is slightly understated.">Momentum</th>'
-        '<th title="Trend: M2 ÷ M1. ↑ Growing ≥1.3x · → Stable 0.6–1.3x · ↓ Declining ≤0.6x · Unknown if M1 missing.">Trend</th>'
+        '<th title="Momentum: this week vs last 30 days (7d reviews ÷ avg weekly from 30d). Is pace speeding up or slowing right now? 1.0x = flat. Contrast with Trend which measures this month vs all-time.">Momentum</th>'
+        '<th title="Trend: 30d vs all-time (vel ÷ M1). Is this month above or below the shop\'s lifetime average? ↑ Growing = 30d pace ≥1.3x lifetime · → Stable = within 0.6–1.3x · ↓ Declining = ≤0.6x lifetime. Contrast with Momentum which measures this week vs this month.">Trend</th>'
         '<th title="Confidence: M1 vs M2 agreement. High = within 40% OR rapid growth (M2 ≥2x M1). Medium = 40–70% divergence or only one signal available. Low = &gt;70% divergence without clear growth explanation.">Confidence</th>'
         '<th title="Total lifetime sales across all products on the Etsy shop page. Not monthly.">Lifetime Sales</th>'
         '<th title="Months since shop opened on Etsy. Approximate if derived from \'X years on Etsy\' display text.">Age (mo)</th>'
@@ -1417,10 +1435,13 @@ def build_shop_intel_tab(watchlist, velocity=None):
         '<strong>M1 Lifetime</strong> total lifetime Etsy sales ÷ months active — historical average, not current pace. May use "X years on Etsy" as approximation when exact open date is unavailable (precision flagged as relative in source data) &nbsp;·&nbsp; '
         '<strong>M2 Current</strong> review rate × 30 × 7 over 5-month window — best signal for what the shop is doing right now &nbsp;·&nbsp; '
         '<strong>7d Reviews</strong> reviews in the last 7 days — pulse check; confirms the shop is actively selling this week &nbsp;·&nbsp; '
-        '<strong>Momentum</strong> 7d reviews ÷ (30d reviews ÷ 4) — 1.0x = flat pace; above = accelerating vs 30d baseline; below = slowing. '
+        '<strong>Momentum</strong> this week vs last 30 days — 7d reviews ÷ (30d reviews ÷ 4). Is pace speeding up or slowing right now? 1.0x = flat. '
         '&gt;1.5x 🔥 Surging &nbsp;·&nbsp; 1.1–1.5x ↑ Growing &nbsp;·&nbsp; 0.9–1.1x → Stable &nbsp;·&nbsp; &lt;0.9x ↓ Cooling. '
-        '<em>Caveat: the 7-day window is included in the 30-day count, so true acceleration is slightly understated.</em> &nbsp;·&nbsp; '
-        '<strong>Trend</strong> M2 ÷ M1 — ↑ Growing ≥1.3x · → Stable 0.6–1.3x · ↓ Declining ≤0.6x · Unknown if M1 missing &nbsp;·&nbsp; '
+        '<em>Caveat: the 7-day window is included in the 30-day count, so true acceleration is slightly understated.</em> '
+        'Contrast with Trend which measures this month vs all-time. &nbsp;·&nbsp; '
+        '<strong>Trend</strong> 30 days vs all-time — velocity est_sales_30d ÷ M1 lifetime avg. Is this month above or below the shop\'s historical average? '
+        '↑ Growing ≥1.3x · → Stable 0.6–1.3x · ↓ Declining ≤0.6x · Unknown if velocity or M1 missing. '
+        'Contrast with Momentum which measures this week vs this month. &nbsp;·&nbsp; '
         '<strong>Confidence</strong> M1 vs M2 agreement: '
         'High = signals within 40% OR rapid growth (M2 ≥2x M1, flagged "Rapid growth detected") &nbsp;·&nbsp; '
         'Medium = 40–70% divergence or only one signal available &nbsp;·&nbsp; '
