@@ -5,7 +5,7 @@ generate-competitor-report.py
 Generates a self-contained competitor-report.html with three tabs:
   Tab 1 — Market Insights    (Niche Verdict + Design Patterns visual + market-insights.md sections)
   Tab 2 — Competitor Report  (card grid from competitors.json)
-  Tab 3 — Shop Intelligence  (M1/M2/M3 table from shop-watchlist.json)
+  Tab 3 — Shop Intelligence  (M1/M2 estimates + velocity from shop-watchlist.json + shop-velocity.json)
 
 Required inputs before running:
   competitors.json, market-insights.md, shop-watchlist.json, patterns-config.json
