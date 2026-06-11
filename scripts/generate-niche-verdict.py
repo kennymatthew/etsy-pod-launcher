@@ -292,20 +292,121 @@ def compute_reviews_percentiles(entries):
     }
 
 
+# ── Comfort Colors hex lookup ─────────────────────────────────────────────────
+# Tier 1 (CONFIRMED): scraped from retail.comfortcolors.com inline swatch CSS.
+# Tier 2 (APPROX): cross-referenced from POD community references; flagged below.
+# To update a Tier 2 entry: replace the hex and remove the # APPROX comment.
+# Source: retail.comfortcolors.com/en-us/comfort-colors-1717 (2026-06-11)
+CC_HEX = {
+    # Tier 1 — confirmed from official site
+    'White':          '#FFFFFF',
+    'Black':          '#25282A',
+    'True Navy':      '#041E42',
+    'Crimson':        '#A4123F',
+    'Berry':          '#7E4966',
+    'Watermelon':     '#F4364C',
+    'Crunchberry':    '#EF4A81',
+    'Flo Blue':       '#5576D1',
+    'Violet':         '#7474C1',
+    'Lagoon Blue':    '#05C3DE',
+    'Chambray':       '#BDD6E6',
+    'Ice Blue':       '#5B7F95',
+    'Denim':          '#425563',
+    'Granite':        '#7C878E',
+    'Grey':           '#716E6A',
+    'Seafoam':        '#487A7B',
+    'Chalky Mint':    '#5CB8B2',
+    'Island Reef':    '#8FE2B0',
+    'Light Green':    '#5C7F71',
+    'Blue Spruce':    '#3E5D58',
+    'Butter':         '#F5E1A4',
+    'Bright Salmon':  '#FF6D6A',
+    'Neon Red Orange':'#FF585D',
+    'Pepper':         '#4E4B48',
+    # Tier 2 — approximated; update when confirmed hex is available
+    'Ivory':          '#F4F0E0',  # APPROX
+    'Blossom':        '#E8B4C8',  # APPROX
+    'Blue Jean':      '#6B8DB2',  # APPROX
+    'Moss':           '#6B7A3C',  # APPROX
+    'Espresso':       '#2C1A0E',  # APPROX
+    'Yam':            '#C4623A',  # APPROX
+    'Orchid':         '#C597C5',  # APPROX
+    'Bay':            '#6B8FA3',  # APPROX
+    'Sage':           '#8FAF8F',  # APPROX
+    'Mustard':        '#C9A84C',  # APPROX
+    'Red':            '#B22222',  # APPROX
+    'Brick':          '#8B3A3A',  # APPROX
+    'Terracotta':     '#C06040',  # APPROX
+    'Banana':         '#FAE87C',  # APPROX
+    'Melon':          '#F4A47A',  # APPROX
+    'Sandstone':      '#C8B89A',  # APPROX
+    'Hemp':           '#A89070',  # APPROX
+    'Khaki':          '#C8B878',  # APPROX
+    'Peach':          '#FFCBA4',  # APPROX
+    'Neon Pink':      '#FF69B4',  # APPROX
+    'Sapphire':       '#2D5FA8',  # APPROX
+}
+
+# DTG threshold: 0.35 (higher than WCAG 0.179 — DTG fabric needs white ink
+# on mid-tones that web accessibility considers "light enough for dark text")
+_DTG_THRESHOLD = 0.35
+
+
+def _luminance(hex_str):
+    """W3C relative luminance from a hex color string. Returns 0.0–1.0."""
+    h = hex_str.lstrip('#')
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    def lin(c):
+        c /= 255.0
+        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+    return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+
+
+def _classify_color(name):
+    """Returns ('light'|'dark'|'unknown', luminance|None, tier)."""
+    key = name.strip().title()
+    # Try exact match, then case-insensitive
+    hex_val = CC_HEX.get(key) or CC_HEX.get(name.strip())
+    if not hex_val:
+        for k, v in CC_HEX.items():
+            if k.lower() == name.strip().lower():
+                hex_val = v
+                key = k
+                break
+    if not hex_val:
+        return ('unknown', None, None)
+    lum = _luminance(hex_val)
+    shade = 'light' if lum > _DTG_THRESHOLD else 'dark'
+    tier = 'approx' if '# APPROX' in f'{key}' or any(
+        k.lower() == key.lower() and 'APPROX' in f'{CC_HEX[k]}'
+        for k in CC_HEX
+    ) else 'confirmed'
+    # Re-check tier from dict comment (stored as suffix in value — not possible,
+    # so check against known Tier 1 keys instead)
+    tier1 = {k.lower() for k in [
+        'White','Black','True Navy','Crimson','Berry','Watermelon','Crunchberry',
+        'Flo Blue','Violet','Lagoon Blue','Chambray','Ice Blue','Denim','Granite',
+        'Grey','Seafoam','Chalky Mint','Island Reef','Light Green','Blue Spruce',
+        'Butter','Bright Salmon','Neon Red Orange','Pepper',
+    ]}
+    tier = 'confirmed' if key.lower() in tier1 else 'approx'
+    return (shade, round(lum, 3), tier)
+
+
 def compute_color_strategy(entries):
     """
     Compute all color strategy data deterministically from competitors.json.
     Returns:
       - top5_by_reviews: top 5 shirt listings by reviews, with blank + color count
       - cc_count: number of CC shirt listings
-      - cc_color_freq: list of (color, count, pct) sorted by frequency, top 20
+      - cc_color_freq: list of (color, count, pct, shade, tier) sorted by freq, top 20
+      - cc_light / cc_dark / cc_unknown: colors split by DTG ink classification
       - bc_listings: confirmed BC shirt listings with id, color_count, price_real_min
       - bc_price_min / bc_price_max: actual price range across BC listings
     """
     from collections import Counter
 
     shirts = [e for e in entries if e.get('is_shirt')]
-
     top5 = sorted(shirts, key=lambda e: e.get('reviews') or 0, reverse=True)[:5]
 
     cc = [e for e in shirts if norm_blank(e.get('blank')) == 'Comfort Colors']
@@ -313,10 +414,16 @@ def compute_color_strategy(entries):
     for e in cc:
         all_cc_colors.extend(e.get('colors') or [])
     cc_n = len(cc)
-    cc_freq = [
-        (color, count, round(count / cc_n * 100) if cc_n else 0)
-        for color, count in Counter(all_cc_colors).most_common(20)
-    ]
+
+    cc_freq = []
+    for color, count in Counter(all_cc_colors).most_common(20):
+        shade, lum, tier = _classify_color(color)
+        pct = round(count / cc_n * 100) if cc_n else 0
+        cc_freq.append((color, count, pct, shade, lum, tier))
+
+    cc_light   = [(c, cnt, pct, lum, tier) for c, cnt, pct, shade, lum, tier in cc_freq if shade == 'light']
+    cc_dark    = [(c, cnt, pct, lum, tier) for c, cnt, pct, shade, lum, tier in cc_freq if shade == 'dark']
+    cc_unknown = [(c, cnt, pct, lum, tier) for c, cnt, pct, shade, lum, tier in cc_freq if shade == 'unknown']
 
     bc = [e for e in shirts if norm_blank(e.get('blank')) == 'Bella Canvas']
     bc_prices = [e.get('price_real_min') for e in bc if e.get('price_real_min')]
@@ -332,7 +439,10 @@ def compute_color_strategy(entries):
             for e in top5
         ],
         'cc_count': cc_n,
-        'cc_color_freq': cc_freq,
+        'cc_freq': cc_freq,
+        'cc_light': cc_light,
+        'cc_dark': cc_dark,
+        'cc_unknown': cc_unknown,
         'bc_listings': sorted(
             [
                 {
@@ -599,13 +709,30 @@ def main():
         print(f"| {r['id']} | {r['reviews']:,} | {r['blank']} | {r['color_count']} |")
     print()
 
-    print(f'**Comfort Colors palette — most common colors across {cs["cc_count"]} CC shirt listings:**')
+    n = cs['cc_count']
+    print(f'**Comfort Colors palette — most common colors across {n} CC shirt listings**')
+    print(f'*(Classified by DTG ink rule: luminance > 0.35 = light shirt → use black-ink design; ≤ 0.35 = dark shirt → use white-ink design)*')
     print()
-    print('| Color | Listings | % of CC listings |')
-    print('|---|---|---|')
-    for color, count, pct in cs['cc_color_freq']:
-        print(f'| {color} | {count}/{cs["cc_count"]} | {pct}% |')
-    print()
+
+    def _print_cc_subtable(rows, label, ink_note, n):
+        if not rows:
+            print(f'*No {label.lower()} colors in top 20.*')
+            return
+        print(f'**{label}** — {ink_note}')
+        print()
+        print('| Color | Listings | % of CC listings | Luminance | Hex source |')
+        print('|---|---|---|---|---|')
+        for color, count, pct, lum, tier in rows:
+            hex_val = CC_HEX.get(color.strip().title()) or CC_HEX.get(color.strip()) or '—'
+            lum_str = f'{lum:.3f}' if lum is not None else '—'
+            src = '✓ confirmed' if tier == 'confirmed' else '~ approx'
+            print(f'| {color} | {count}/{n} | {pct}% | {lum_str} | {src} |')
+        print()
+
+    _print_cc_subtable(cs['cc_light'],   'Light colors (use black-ink design file)',  'luminance > 0.35', n)
+    _print_cc_subtable(cs['cc_dark'],    'Dark colors (use white-ink design file)',    'luminance ≤ 0.35', n)
+    if cs['cc_unknown']:
+        _print_cc_subtable(cs['cc_unknown'], 'Unknown — not in hex lookup',           'add hex to CC_HEX dict', n)
 
     if cs['bc_listings']:
         print(f'**Bella Canvas listings ({len(cs["bc_listings"])} confirmed):**')
@@ -620,7 +747,7 @@ def main():
     else:
         print('No confirmed Bella Canvas listings found.')
     print()
-    print('[FILL IN: one sentence on recommended palette and color count for your own listing]')
+    print('[FILL IN: one sentence on recommended palette — how many light vs dark colors, and which specific colors to prioritize]')
     print('[AI instruction: do NOT add colors, IDs, or price ranges not shown above — all numbers come from this block]')
 
 
