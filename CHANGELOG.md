@@ -9,6 +9,20 @@ Version numbering:
 
 ---
 
+## [v1.9.0] — 2026-06-12
+
+### Added
+- **Section 7 signal commentary** (`generate-competitor-report.py`) — after each tier table, auto-generates a "What these listings have in common" block comparing Tier 1 / Tier 2 listings against the remaining field on five measurable signals: Comfort Colors blank, personalization, Bestseller badge, in-carts, and reviews in the last 7 days. Only surfaces findings where the gap is ≥ 20 percentage points; falls back to a "no signals exceed threshold" note if none qualify. All findings tagged `[our data]`.
+- **`analyze-shop-velocity.py`** — new standalone script that parses raw-shops review pages to compute per-shop review velocity; outputs a momentum table to console and `shop-velocity.json` for downstream use. Supports `--review-rate` and `--scrape-date` overrides.
+
+### Changed
+- **`research-shops.py`** — removed Method 3 (listing-rollup from `competitors.json`); field kept in schema as `null` for backwards compatibility. Added relative shop-age fallback parser: "3 years on Etsy" → subtract from current month (precision: `relative`). `estimate_shop()` signature simplified (no `listing_rollup` arg).
+
+### Fixed
+- `research-shops.py` — shop-opened parser now handles Etsy's "X years on Etsy" format in addition to absolute "Member since" / "On Etsy since" patterns, preventing `None` shop-age on shops that display relative age.
+
+---
+
 ## [v1.8.0] — 2026-06-11
 
 ### Added

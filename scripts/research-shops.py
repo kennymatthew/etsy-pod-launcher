@@ -3,11 +3,10 @@
 research-shops.py
 
 Scrapes competitor Etsy shop pages and builds shop-watchlist.json.
-Derives shop-level monthly sales estimates from three signals:
+Derives shop-level monthly sales estimates from two signals:
 
   Method 1 — total_sales ÷ months_active        (lifetime average, from shop page)
   Method 2 — rate-based projection × 7          (current momentum, from /reviews pages)
-  Method 3 — sum of listing reviews from competitors.json (demand proxy, not sales estimate)
 
 M2 scrapes /reviews pages dynamically until the oldest review is 5 months old (150 days),
 up to a max of 20 pages. This smooths out seasonal spikes (e.g. Father's Day, Christmas).
@@ -81,10 +80,12 @@ def parse_number(text):
 
 def parse_shop_opened(text):
     """
-    Parse 'Member since Jan 2019' or 'On Etsy since 2019' → datetime.date.
-    Returns (date, precision) where precision is 'month' or 'year'.
+    Parse shop age from scraped page. Two patterns:
+    1. 'On Etsy since 2019' / 'Member since Jan 2019' → exact year (preferred)
+    2. '3 years on Etsy' → subtract from current month (fallback, rounded by Etsy)
+    Returns (date, precision) where precision is 'month', 'year', or 'relative'.
     """
-    # "Member since January 2019" or "Jan 2019"
+    # Primary: absolute year e.g. "On Etsy since 2023" or "Member since Jan 2021"
     m = re.search(
         r'(?:member since|on etsy since|joined)\s+([a-z]+\.?\s+)?(\d{4})',
         text, re.IGNORECASE
@@ -95,6 +96,15 @@ def parse_shop_opened(text):
         month = MONTH_MAP.get(month_str, 1)
         precision = 'month' if month_str in MONTH_MAP else 'year'
         return datetime.date(year, month, 1), precision
+
+    # Fallback: relative e.g. "3 years on Etsy" — subtract from current month
+    m = re.search(r'(\d+)\s+years?\s+on\s+etsy', text, re.IGNORECASE)
+    if m:
+        years = int(m.group(1))
+        today = datetime.date.today()
+        approx = datetime.date(today.year - years, today.month, 1)
+        return approx, 'relative'
+
     return None, None
 
 
@@ -191,7 +201,7 @@ def scrape_reviews_pages(shop_name, raw_dir, max_pages=20, lookback_days=150):
 
 # ── Estimation ─────────────────────────────────────────────────────────────────
 
-def estimate_shop(shop_name, content, listing_rollup, review_dates=None):
+def estimate_shop(shop_name, content, review_dates=None):
     review_dates = review_dates or []
     result = {
         'shop_name': shop_name,
@@ -210,8 +220,8 @@ def estimate_shop(shop_name, content, listing_rollup, review_dates=None):
         'reviews_last_90d': None,
         'method2_current_momentum': None,
         'method2_window': None,
-        # Method 3
-        'method3_listing_rollup': listing_rollup,
+        # Method 3 (deprecated — always None; kept for schema compatibility)
+        'method3_listing_rollup': None,
         # Combined
         'estimated_monthly_sales': None,
         'confidence': None,
@@ -272,57 +282,42 @@ def estimate_shop(shop_name, content, listing_rollup, review_dates=None):
     else:
         notes.append(f'Method 2 skipped: only {len(review_dates)} review occurrences found (need 5+)')
 
-    # Method 3 — bottom-up rollup (already passed in)
-    if not listing_rollup:
-        notes.append('Method 3 unavailable: no listings from this shop in competitors.json')
-
     # ── Combine ────────────────────────────────────────────────────────────────
-    signals = [v for v in [
-        result['method1_lifetime_avg_monthly'],
-        result['method2_current_momentum'],
-        result['method3_listing_rollup'],
-    ] if v is not None]
+    m1 = result['method1_lifetime_avg_monthly']
+    m2 = result['method2_current_momentum']
 
-    if not signals:
+    if not m1 and not m2:
         result['confidence'] = 'low'
         notes.append('No signals available — page may not have scraped correctly')
         return result
 
-    # Headline: prefer M2 (current) if it passed the reliability threshold, else M1, else M3
-    if result['method2_current_momentum']:
-        headline = result['method2_current_momentum']
-    elif result['method1_lifetime_avg_monthly']:
-        headline = result['method1_lifetime_avg_monthly']
-    else:
-        headline = result['method3_listing_rollup']
+    # Headline: prefer M2 (current momentum) if available, else M1
+    result['estimated_monthly_sales'] = m2 if m2 else m1
 
-    result['estimated_monthly_sales'] = headline
-
-    # Confidence: cross-validate only reliable signals (exclude M2 if it was skipped)
-    reliable_signals = [v for v in [
-        result['method1_lifetime_avg_monthly'],
-        result['method2_current_momentum'],  # None if skipped
-        result['method3_listing_rollup'],
-    ] if v is not None]
-
-    if len(reliable_signals) >= 2:
-        lo, hi = min(reliable_signals), max(reliable_signals)
-        divergence = (hi - lo) / hi if hi > 0 else 0
-        if divergence <= 0.4:
+    # Confidence: M1 vs M2 only
+    if m1 and m2:
+        ratio = m2 / m1
+        if ratio >= 2.0:
             result['confidence'] = 'high'
-        elif divergence <= 0.7:
-            result['confidence'] = 'medium'
-            notes.append(f'Signals diverge {round(divergence*100)}% — use with caution')
+            notes.append(f'Rapid growth detected — M2 is {round(ratio, 1)}x above lifetime avg')
         else:
-            result['confidence'] = 'low'
-            notes.append(f'Signals diverge {round(divergence*100)}% — pick the lower value as conservative estimate')
+            divergence = (max(m1, m2) - min(m1, m2)) / max(m1, m2)
+            if divergence <= 0.4:
+                result['confidence'] = 'high'
+            elif divergence <= 0.7:
+                result['confidence'] = 'medium'
+                notes.append(f'M1 and M2 diverge {round(divergence*100)}% — use with caution')
+            else:
+                result['confidence'] = 'low'
+                notes.append(f'M1 and M2 diverge {round(divergence*100)}% — signals unclear')
+    elif m2 and not m1:
+        result['confidence'] = 'medium'
+        notes.append('Only M2 available — M1 missing (shop_opened not scraped)')
     else:
         result['confidence'] = 'medium'
-        notes.append('Only one signal available — cannot cross-validate')
+        notes.append('Only M1 available — M2 skipped (too few review dates)')
 
-    # Trend signal: only meaningful when M2 passed reliability threshold
-    m1 = result['method1_lifetime_avg_monthly']
-    m2 = result['method2_current_momentum']
+    # Trend signal: only meaningful when both M1 and M2 are available
     if m1 and m2:
         ratio = m2 / m1
         if ratio >= 1.3:
@@ -335,21 +330,6 @@ def estimate_shop(shop_name, content, listing_rollup, review_dates=None):
         result['trend_signal'] = 'unknown'
 
     return result
-
-
-# ── Load listing rollup from competitors.json ─────────────────────────────────
-
-def build_listing_rollups(competitors_path):
-    if not competitors_path.exists():
-        return {}
-    data = json.loads(competitors_path.read_text())
-    rollup = {}
-    for item in data:
-        shop = item.get('shop_name', '').strip()
-        rev_sum = item.get('reviews') or 0
-        if shop:
-            rollup[shop] = rollup.get(shop, 0) + rev_sum
-    return rollup
 
 
 # ── Top shops from competitors.json ───────────────────────────────────────────
@@ -396,8 +376,6 @@ def main():
             print("✗ No shop names found in competitors.json and no --shops provided")
             return 1
 
-    rollups = build_listing_rollups(competitors_path)
-
     print(f"\n── Shop Watchlist: {args.niche} ──")
     print(f"Shops to scrape : {len(shop_names)}")
     print(f"Firecrawl calls : 1 shop page + up to 20 review pages per shop (stops at 5mo lookback)")
@@ -443,19 +421,18 @@ def main():
                 'error': 'scrape failed',
             })
             continue
-        entry = estimate_shop(shop, content, rollups.get(shop), review_results.get(shop, []))
+        entry = estimate_shop(shop, content, review_results.get(shop, []))
         watchlist.append(entry)
 
         m1 = entry.get('method1_lifetime_avg_monthly')
         m2 = entry.get('method2_current_momentum')
-        m3 = entry.get('method3_listing_rollup')
         headline = entry.get('estimated_monthly_sales', '?')
         trend = entry.get('trend_signal', '') or ''
         conf = entry.get('confidence', '?')
         trend_icon = {'growing': '↑', 'declining': '↓', 'stable': '→'}.get(trend, ' ')
         trend_short = trend.split()[0] if trend else '?'
 
-        print(f"  {shop:<35}  est={headline}/mo  M1={m1} M2={m2} M3={m3}  {trend_icon} {trend_short}  [{conf}]")
+        print(f"  {shop:<35}  est={headline}/mo  M1={m1} M2={m2}  {trend_icon} {trend_short}  [{conf}]")
 
     # Sort by estimated_monthly_sales descending
     watchlist.sort(

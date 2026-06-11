@@ -164,6 +164,7 @@ flowchart TD
   extract-competitors.py        ← build competitors.json from scrapes/ (deterministic, self-checking — always use this)
   extract-competitors-prompt.md ← schema reference + synthesis rules (read-only; do not use for extraction)
   research-shops.py             ← scrape competitor shop pages → shop-watchlist.json (required before generating report)
+  analyze-shop-velocity.py      ← parse raw-shops review pages → per-shop velocity table + shop-velocity.json (optional deep-dive)
 ```
 
 ---

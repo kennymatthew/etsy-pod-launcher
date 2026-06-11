@@ -100,6 +100,46 @@ def _extract_interp_slots(section_text):
     return cleaned[:4]
 
 
+def _tier_signal_commentary(tier, baseline, tier_label, gap_threshold=20):
+    """
+    Compare a tier against the baseline (all other listings) on measurable signals.
+    Only surface findings where the gap >= gap_threshold percentage points.
+    Returns a list of finding strings, each tagged [our data] / [inferred].
+    """
+    from datetime import date, datetime
+    today = date.today()
+
+    def rate(group, fn):
+        if not group:
+            return 0
+        return round(sum(1 for d in group if fn(d)) / len(group) * 100)
+
+    signals = {
+        'Comfort Colors blank': lambda d: 'comfort' in (d.get('blank') or '').lower(),
+        'personalization':      lambda d: bool(d.get('personalization')),
+        'Bestseller badge':     lambda d: bool(d.get('is_bestseller')),
+        'in carts':             lambda d: (d.get('in_carts') or 0) > 0,
+        'reviewed last 7 days': lambda d: bool(
+            d.get('most_recent_review_date') and
+            (today - datetime.strptime(d['most_recent_review_date'], '%Y-%m-%d').date()).days <= 7
+        ),
+    }
+
+    findings = []
+    for label, fn in signals.items():
+        tier_rate = rate(tier, fn)
+        base_rate = rate(baseline, fn)
+        gap = tier_rate - base_rate
+        if abs(gap) >= gap_threshold:
+            direction = 'higher' if gap > 0 else 'lower'
+            findings.append(
+                f'**{label}**: {tier_rate}% of {tier_label} vs {base_rate}% of remaining listings '
+                f'({abs(gap)}pp {direction}). `[our data]`'
+            )
+
+    return findings
+
+
 def _fpr_confidence(reviews):
     """Deterministic confidence tier for FPR based on review count."""
     if reviews >= 20:
@@ -142,6 +182,14 @@ def update_listings_to_watch_in_md(md_text, comp_data):
         key=lambda x: -x['fpr']
     )
 
+    # Raw shirt entries for signal comparison (keyed by listing id)
+    shirt_map = {e.get('id'): e for e in shirts}
+    tier1_ids = {r['id'] for r in tier1}
+    tier2_ids = {r['id'] for r in tier2}
+    tier1_raw = [shirt_map[i] for i in tier1_ids if i in shirt_map]
+    tier2_raw = [shirt_map[i] for i in tier2_ids if i in shirt_map]
+    rest_raw  = [e for e in shirts if e.get('id') not in tier1_ids and e.get('id') not in tier2_ids]
+
     if not tier1 and not tier2:
         return md_text
 
@@ -167,10 +215,17 @@ def update_listings_to_watch_in_md(md_text, comp_data):
 
     # Tier 1 block
     if tier1:
+        t1_findings = _tier_signal_commentary(tier1_raw, rest_raw, f'Tier 1 ({len(tier1)})')
+        t1_signal_block = (
+            '\n**What these listings have in common vs the rest of the field:**\n'
+            + '\n'.join(f'- {f}' for f in t1_findings)
+            + ('\n- *No signals exceed the 20pp gap threshold — Tier 1 listings do not differ significantly from the field on measured attributes.* `[our data]`' if not t1_findings else '')
+        )
         tier1_block = (
             f'### Tier 1 — Reliable (reviews ≥ 20, FPR > 5.0)\n\n'
             f'{col_header}\n{col_sep}\n'
             + chr(10).join(build_rows(tier1))
+            + f'\n{t1_signal_block}'
         )
     else:
         tier1_block = '### Tier 1 — Reliable (reviews ≥ 20, FPR > 5.0)\n\n*No listings meet Tier 1 criteria.*'
@@ -183,11 +238,18 @@ def update_listings_to_watch_in_md(md_text, comp_data):
             f'FPR is unreliable at this sample size; treat as directional only. `[our data]`\n'
             if low_conf_t2 else ''
         )
+        t2_findings = _tier_signal_commentary(tier2_raw, rest_raw, f'Tier 2 ({len(tier2)})')
+        t2_signal_block = (
+            '\n**What these listings have in common vs the rest of the field:**\n'
+            + '\n'.join(f'- {f}' for f in t2_findings)
+            + ('\n- *No signals exceed the 20pp gap threshold — Tier 2 listings do not differ significantly from the field on measured attributes.* `[our data]`' if not t2_findings else '')
+        )
         tier2_block = (
             f'### Tier 2 — Directional only (reviews < 20, FPR > 10.0 — treat as weak signal)\n'
             f'{warn_line}\n'
             f'{col_header}\n{col_sep}\n'
             + chr(10).join(build_rows(tier2))
+            + f'\n{t2_signal_block}'
         )
     else:
         tier2_block = ''
@@ -1238,8 +1300,10 @@ def build_top_strip(comp_data, ems_reliable=False):
     )
 
 
-def build_shop_intel_tab(watchlist):
-    """Build the Shop Intelligence tab HTML from shop-watchlist.json data."""
+
+
+def build_shop_intel_tab(watchlist, velocity=None):
+    """Build the Shop Intelligence tab — single merged table combining watchlist + velocity data."""
     if not watchlist:
         return (
             '\n<div id="tab-shops" class="tab-panel">'
@@ -1251,70 +1315,112 @@ def build_shop_intel_tab(watchlist):
     shops = [s for s in watchlist if 'error' not in s]
     shops.sort(key=lambda s: s.get('estimated_monthly_sales') or s.get('method1_lifetime_avg_monthly') or 0, reverse=True)
 
-    trend_icon = {'growing': '↑', 'declining': '↓', 'stable': '→', 'unknown': '–'}
+    # Build velocity lookup by shop name
+    vel_map = {}
+    if velocity:
+        for v in velocity:
+            key = v.get('shop') or v.get('shop_name', '')
+            vel_map[key] = v
+
+    trend_icon  = {'growing': '↑', 'declining': '↓', 'stable': '→', 'unknown': '–'}
     trend_color = {'growing': 'si-trend-up', 'declining': 'si-trend-down', 'stable': 'si-trend-stable', 'unknown': 'si-trend-unknown'}
-    conf_color = {'high': 'si-conf-high', 'medium': 'si-conf-med', 'low': 'si-conf-low'}
+    conf_color  = {'high': 'si-conf-high', 'medium': 'si-conf-med', 'low': 'si-conf-low'}
 
     rows = ''
     for s in shops:
-        name = s.get('shop_name', '—')
-        url = s.get('etsy_url', '#')
-        headline = s.get('estimated_monthly_sales') or '—'
-        m1 = s.get('method1_lifetime_avg_monthly') or '—'
-        m2 = s.get('method2_current_momentum') or '—'
-        m3 = s.get('method3_listing_rollup') or '—'
-        m2_window = s.get('method2_window') or ''
-        trend = s.get('trend_signal') or 'unknown'
-        conf = s.get('confidence') or 'low'
+        name        = s.get('shop_name', '—')
+        url         = s.get('etsy_url', '#')
+        m2          = s.get('method2_current_momentum')
+        m1          = s.get('method1_lifetime_avg_monthly')
+        m2_window   = s.get('method2_window') or ''
+        headline    = m2 or m1 or '—'
+        trend       = s.get('trend_signal') or 'unknown'
+        conf        = s.get('confidence') or 'low'
         total_sales = s.get('total_sales')
-        total_str = f'{total_sales:,}' if total_sales else '—'
-        months = s.get('months_active') or '—'
-        notes = s.get('confidence_notes') or []
-        notes_html = ('<div class="si-notes">' + ' &middot; '.join(notes[:2]) + '</div>') if notes else ''
+        total_str   = f'{total_sales:,}' if total_sales else '—'
+        months      = s.get('months_active') or '—'
+        m1_str      = f'{m1:,}' if m1 else '—'
+        m2_str      = (f'<span title="{m2_window}">{m2:,}</span>'
+                       f'<div class="si-window">{m2_window}</div>') if m2 else '—'
+        headline_str = f'{headline:,}' if isinstance(headline, int) else headline
+        notes       = s.get('confidence_notes') or []
+        notes_html  = ('<div class="si-notes">' + ' &middot; '.join(notes[:2]) + '</div>') if notes else ''
+
+        # Velocity columns — inline from vel_map, no separate table
+        vel      = vel_map.get(name, {})
+        r7       = vel.get('reviews_7d')
+        momentum = vel.get('momentum_ratio')
+        r7_str   = f'{r7:,}' if isinstance(r7, int) else '—'
+
+        if momentum is not None:
+            if momentum >= 1.5:   mc = '#C2410C'; ml = f'{momentum:.2f}x 🔥'
+            elif momentum >= 1.1: mc = '#15803d'; ml = f'{momentum:.2f}x ↑'
+            elif momentum >= 0.9: mc = '#6b7280'; ml = f'{momentum:.2f}x →'
+            else:                 mc = '#1d4ed8'; ml = f'{momentum:.2f}x ↓'
+            mom_str = f'<span style="font-weight:700;color:{mc}">{ml}</span>'
+        else:
+            mom_str = '—'
 
         trend_cls = trend_color.get(trend, 'si-trend-unknown')
-        conf_cls = conf_color.get(conf, 'si-conf-low')
+        conf_cls  = conf_color.get(conf, 'si-conf-low')
 
         rows += f'''<tr>
   <td class="si-shop-cell"><a href="{url}" target="_blank" class="si-shop-link">{name} &#8599;</a>{notes_html}</td>
-  <td class="si-num si-headline">{headline}</td>
-  <td class="si-num">{m1}</td>
-  <td class="si-num"><span title="{m2_window}">{m2}</span><div class="si-window">{m2_window}</div></td>
-  <td class="si-num">{m3}</td>
+  <td class="si-num si-headline">{headline_str}</td>
+  <td class="si-num">{m1_str}</td>
+  <td class="si-num">{m2_str}</td>
+  <td class="si-num">{r7_str}</td>
+  <td class="si-num">{mom_str}</td>
   <td><span class="si-trend {trend_cls}">{trend_icon.get(trend,"–")} {trend.capitalize()}</span></td>
   <td><span class="si-conf {conf_cls}">{conf.capitalize()}</span></td>
   <td class="si-num si-muted">{total_str}</td>
   <td class="si-num si-muted">{months}</td>
 </tr>'''
 
+    scrape_date = velocity[0].get('scrape_date', '') if velocity else ''
+    scrape_note = f' &nbsp;·&nbsp; <strong>Velocity scraped:</strong> {scrape_date}' if scrape_date else ''
+
     return (
         '\n<div id="tab-shops" class="tab-panel">'
         '\n<div class="si-outer">'
         '\n<div class="si-header">'
         '\n  <h1>Shop Intelligence</h1>'
-        '\n  <p class="si-subtitle">Three-signal monthly sales estimate per competitor shop. '
-        'M2 uses a 5-month review window (up to 20 pages) to smooth seasonal spikes.</p>'
+        '\n  <p class="si-subtitle">Monthly sales estimates, current momentum, and confidence signals per competitor shop. '
+        '<strong>Est/mo</strong> uses M2 (5-month review-rate window) as primary signal; falls back to M1 (lifetime average) if M2 is unavailable. '
+        'All estimates assume 1-in-7 buyers leave a review (~14% review rate — apparel industry proxy). '
+        'Review velocity and momentum columns are inline in this table. See legend below for methodology.</p>'
         '\n</div>'
         '\n<div class="si-table-wrap"><table class="si-table">'
         '\n<thead><tr>'
         '<th>Shop</th>'
-        '<th title="Headline estimate — M2 if available, else M1">Est/mo</th>'
-        '<th title="Method 1: total_sales ÷ months active (lifetime average)">M1 Lifetime</th>'
-        '<th title="Method 2: review rate over 5-month window × 30 × 7 (current pace)">M2 Current</th>'
-        '<th title="Method 3: sum of listing-level estimates from competitors.json">M3 Rollup</th>'
-        '<th>Trend</th>'
-        '<th title="Signal divergence: High <40%, Medium 40-70%, Low >70%">Confidence</th>'
-        '<th title="Total lifetime sales shown on Etsy shop page">Total Sales</th>'
-        '<th>Months Active</th>'
+        '<th title="Est monthly sales — M2 primary, M1 fallback. Assumes 1-in-7 buyers leave a review (~14% review rate).">Est/mo</th>'
+        '<th title="M1 Lifetime avg: total Etsy lifetime sales ÷ months active. Historical average — not current pace. May use \'X years on Etsy\' as approximation if exact open date unavailable (flagged as relative).">M1 Lifetime</th>'
+        '<th title="M2 Current pace: review rate over 5-month window × 30 × 7. Best signal for recent momentum. Hover cell for window detail.">M2 Current</th>'
+        '<th title="Reviews left in the last 7 days. Confirms shop is actively selling this week.">7d Reviews</th>'
+        '<th title="Momentum: 7d reviews ÷ (30d reviews ÷ 4). 1.0x = flat pace. Above 1.0x = accelerating vs 30d baseline; below = slowing. Note: 7d window is included in the 30d count, so true acceleration is slightly understated.">Momentum</th>'
+        '<th title="Trend: M2 ÷ M1. ↑ Growing ≥1.3x · → Stable 0.6–1.3x · ↓ Declining ≤0.6x · Unknown if M1 missing.">Trend</th>'
+        '<th title="Confidence: M1 vs M2 agreement. High = within 40% OR rapid growth (M2 ≥2x M1). Medium = 40–70% divergence or only one signal available. Low = &gt;70% divergence without clear growth explanation.">Confidence</th>'
+        '<th title="Total lifetime sales across all products on the Etsy shop page. Not monthly.">Lifetime Sales</th>'
+        '<th title="Months since shop opened on Etsy. Approximate if derived from \'X years on Etsy\' display text.">Age (mo)</th>'
         '</tr></thead>'
         '\n<tbody>' + rows + '</tbody>'
         '\n</table></div>'
         '\n<div class="si-legend">'
-        '<strong>M1</strong> total_sales ÷ months active (lifetime avg) &nbsp;·&nbsp; '
-        '<strong>M2</strong> review rate × 30 × 7 over 5-month window (current pace) &nbsp;·&nbsp; '
-        '<strong>M3</strong> sum of listing estimates from competitors.json &nbsp;·&nbsp; '
-        '<strong>Trend</strong> = M2 ÷ M1 — ↑ Growing ≥1.3 &nbsp;·&nbsp; → Stable 0.6–1.3 &nbsp;·&nbsp; ↓ Declining ≤0.6 &nbsp;·&nbsp; '
-        '<strong>Confidence</strong> = signal divergence: High &lt;40%, Medium 40–70%, Low &gt;70%'
+        '<strong>Est/mo</strong> M2 primary, M1 fallback — both assume 1-in-7 buyers leave a review (~14% rate; apparel industry proxy) &nbsp;·&nbsp; '
+        '<strong>M1 Lifetime</strong> total lifetime Etsy sales ÷ months active — historical average, not current pace. May use "X years on Etsy" as approximation when exact open date is unavailable (precision flagged as relative in source data) &nbsp;·&nbsp; '
+        '<strong>M2 Current</strong> review rate × 30 × 7 over 5-month window — best signal for what the shop is doing right now &nbsp;·&nbsp; '
+        '<strong>7d Reviews</strong> reviews in the last 7 days — pulse check; confirms the shop is actively selling this week &nbsp;·&nbsp; '
+        '<strong>Momentum</strong> 7d reviews ÷ (30d reviews ÷ 4) — 1.0x = flat pace; above = accelerating vs 30d baseline; below = slowing. '
+        '&gt;1.5x 🔥 Surging &nbsp;·&nbsp; 1.1–1.5x ↑ Growing &nbsp;·&nbsp; 0.9–1.1x → Stable &nbsp;·&nbsp; &lt;0.9x ↓ Cooling. '
+        '<em>Caveat: the 7-day window is included in the 30-day count, so true acceleration is slightly understated.</em> &nbsp;·&nbsp; '
+        '<strong>Trend</strong> M2 ÷ M1 — ↑ Growing ≥1.3x · → Stable 0.6–1.3x · ↓ Declining ≤0.6x · Unknown if M1 missing &nbsp;·&nbsp; '
+        '<strong>Confidence</strong> M1 vs M2 agreement: '
+        'High = signals within 40% OR rapid growth (M2 ≥2x M1, flagged "Rapid growth detected") &nbsp;·&nbsp; '
+        'Medium = 40–70% divergence or only one signal available &nbsp;·&nbsp; '
+        'Low = &gt;70% divergence without a clear growth explanation &nbsp;·&nbsp; '
+        '<strong>Age (mo)</strong> months since shop opened; approximate when derived from "X years on Etsy" display text (precision: relative) &nbsp;·&nbsp; '
+        '<em>Review rate: M1/M2 use ~14% (1-in-7 buyers) for watchlist estimates; analyze-shop-velocity.py uses 10% by default — override with --review-rate if you want consistency.</em>'
+        f'{scrape_note}'
         '</div>'
         '\n</div>'
         '\n</div>'
@@ -1322,7 +1428,7 @@ def build_shop_intel_tab(watchlist):
 
 
 
-def build_html(niche, comp_data, insights_md, watchlist, date_str, ems_reliable=True, patterns_config=None):
+def build_html(niche, comp_data, insights_md, watchlist, date_str, ems_reliable=True, patterns_config=None, velocity=None):
     # Deduplicate by listing ID
     seen_ids: set = set()
     deduped = []
@@ -1343,7 +1449,7 @@ def build_html(niche, comp_data, insights_md, watchlist, date_str, ems_reliable=
     data_json = json.dumps(comp_data, separators=(',', ':'))
     lookup = {e['id']: e for e in comp_data if e.get('id')}
     top_strip = build_top_strip(comp_data, ems_reliable)
-    shop_intel_tab = build_shop_intel_tab(watchlist)
+    shop_intel_tab = build_shop_intel_tab(watchlist, velocity)
 
     if insights_md:
         insights_title, insights_body = md_to_html(insights_md, lookup)
@@ -1793,6 +1899,36 @@ def build_html(niche, comp_data, insights_md, watchlist, date_str, ems_reliable=
     margin-top: 14px; font-size: 12px; color: var(--text-muted); line-height: 1.7;
   }}
 
+  /* ══ SHOP VELOCITY (Shop Intel tab, section 2) ══ */
+  .sv-section {{ margin-top: 40px; padding-top: 32px; border-top: 2px solid var(--coral-light); }}
+  .sv-section h2 {{ font-size: 17px; font-weight: 700; letter-spacing: -0.3px; margin-bottom: 4px; }}
+  .sv-subtitle {{ font-size: 13px; color: var(--text-secondary); margin-bottom: 18px; line-height: 1.5; }}
+  .sv-table-wrap {{ overflow-x: auto; border-radius: 10px; border: 1px solid var(--border); }}
+  .sv-table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
+  .sv-table thead tr {{ background: var(--bg); }}
+  .sv-table th {{ padding: 10px 14px; text-align: left; font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary);
+    border-bottom: 1px solid var(--border); white-space: nowrap; }}
+  .sv-table th.sv-right {{ text-align: right; }}
+  .sv-table td {{ padding: 12px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; }}
+  .sv-table tbody tr:last-child td {{ border-bottom: none; }}
+  .sv-table tbody tr:hover {{ background: #FAFAF8; }}
+  .sv-right {{ text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }}
+  .sv-shop-link {{ font-weight: 600; color: var(--text-primary); text-decoration: none; }}
+  .sv-shop-link:hover {{ color: var(--coral); }}
+  .sv-momentum {{ font-weight: 700; }}
+  .sv-momentum-surge  {{ color: #C2410C; }}
+  .sv-momentum-up     {{ color: #0D5C2E; }}
+  .sv-momentum-stable {{ color: #1E40AF; }}
+  .sv-momentum-down   {{ color: var(--text-muted); }}
+  .sv-trend {{ display: inline-block; padding: 2px 8px; border-radius: 20px;
+    font-size: 11px; font-weight: 600; white-space: nowrap; }}
+  .sv-trend-surge  {{ background: #FFF0EB; color: #C2410C; border: 1px solid #FDBA74; }}
+  .sv-trend-up     {{ background: var(--green-light); color: #0D5C2E; border: 1px solid #A8D8BB; }}
+  .sv-trend-stable {{ background: var(--blue-light); color: #1E40AF; border: 1px solid #BFDBFE; }}
+  .sv-trend-down   {{ background: #F3F4F6; color: #6B7280; border: 1px solid #D1D5DB; }}
+  .sv-legend {{ margin-top: 14px; font-size: 12px; color: var(--text-muted); line-height: 1.7; }}
+
   /* ══ DESIGN PATTERNS (Tab 1 section) ══ */
   .dp-section {{ margin-bottom: 8px; }}
   .dp-subtitle {{ font-size: 12px; color: var(--text-muted); margin: 4px 0 20px; }}
@@ -2173,6 +2309,7 @@ def main():
     json_path      = BASE_DIR / 'projects' / args.niche / '01-research' / 'competitors.json'
     insights_path  = BASE_DIR / 'projects' / args.niche / '01-research' / 'market-insights.md'
     watchlist_path = BASE_DIR / 'projects' / args.niche / '01-research' / 'shop-watchlist.json'
+    velocity_path  = BASE_DIR / 'projects' / args.niche / '01-research' / 'shop-velocity.json'
     patterns_path  = BASE_DIR / 'projects' / args.niche / '01-research' / 'patterns-config.json'
     dates_path     = BASE_DIR / 'projects' / args.niche / '01-research' / 'scrapes' / 'listing-dates.json'
     out_path       = BASE_DIR / 'projects' / args.niche / '01-research' / 'competitor-report.html'
@@ -2184,6 +2321,7 @@ def main():
     comp_data       = json.load(open(json_path))
     insights_md     = insights_path.read_text() if insights_path.exists() else None
     watchlist       = json.loads(watchlist_path.read_text()) if watchlist_path.exists() else []
+    velocity        = json.loads(velocity_path.read_text()) if velocity_path.exists() else []
     patterns_config = json.loads(patterns_path.read_text()) if patterns_path.exists() else None
 
     # Refresh Section 6 + 7 from live data before rendering
@@ -2197,7 +2335,7 @@ def main():
 
     ems_reliable = False
 
-    html = build_html(args.niche, comp_data, insights_md, watchlist, date_str, ems_reliable, patterns_config)
+    html = build_html(args.niche, comp_data, insights_md, watchlist, date_str, ems_reliable, patterns_config, velocity)
     out_path.write_text(html)
 
     shirt_count = sum(1 for e in comp_data if e.get('is_shirt'))
@@ -2206,6 +2344,7 @@ def main():
     print(f"  Market insights:   {'✓ included' if insights_md else '✗ market-insights.md not found'}")
     print(f"  Design patterns:   {'✓ ' + str(len(patterns_config.get('patterns',[]))) + ' patterns' if patterns_config else '✗ patterns-config.json not found'}")
     print(f"  Shop intelligence: {'✓ ' + str(len(watchlist)) + ' shops' if watchlist else '✗ shop-watchlist.json not found'}")
+    print(f"  Review velocity:   {'✓ ' + str(len(velocity)) + ' shops' if velocity else '✗ shop-velocity.json not found — run analyze-shop-velocity.py'}")
 
 
 if __name__ == '__main__':
